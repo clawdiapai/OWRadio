@@ -1190,16 +1190,9 @@ export class BroadcastTee extends EventEmitter {
 
         while (this.framesDelivered < targetFrames) {
           if (this.crossfadeState.status === 'buffering') {
+            // Keep current active channel playing continuously without dead silence!
+            // When incoming stream has buffered enough frames, equal-power crossfade begins smoothly.
             let frame = this.activeChannel ? this.popFrameFromChannel(this.activeChannel) : null;
-            if (this.crossfadeState.isUserSkip) {
-              const quickFade = 25; // 500ms responsive fadeout
-              const step = Math.min(quickFade, this.crossfadeState.fadeFramesElapsed);
-              const gain = Math.max(0, 1 - (step / quickFade));
-              if (frame && gain < 1) {
-                frame = applyGainToFrame(frame, gain);
-              }
-              this.crossfadeState.fadeFramesElapsed++;
-            }
             if (!frame) frame = this.silenceFrame;
             this.framesDelivered++;
             this.writePcmToBranches(frame);

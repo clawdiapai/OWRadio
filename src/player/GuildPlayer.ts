@@ -100,6 +100,16 @@ export class GuildPlayer extends EventEmitter {
         if (track.streamUrl && track.streamUrl.startsWith('http') && !vault.hasTrack(track.id)) {
           vault.maybePrecache(track.id, track.streamUrl, true).catch(() => {});
         }
+
+        // Continuously feed newly resolved streams into multi-deck standby pool
+        if (track.streamUrl) {
+          const resolvedUrls = this.queue
+            .map((t) => t.streamUrl)
+            .filter((u): u is string => Boolean(u));
+          if (resolvedUrls.length > 0) {
+            this.broadcastTee.prepareStandbyDecks(resolvedUrls);
+          }
+        }
       }
     } finally {
       this.isPreResolvingQueue = false;
@@ -340,7 +350,7 @@ export class GuildPlayer extends EventEmitter {
 
         // Replenish decks in background after transition finishes (prevents CPU spikes during audio crossfade)
         setTimeout(() => {
-          this.primeUpcomingDecks(3);
+          this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
           if (this.autoplayEnabled && this.queue.length < 5) {
             this.replenishAutoplayBuffer();
           }
@@ -355,7 +365,7 @@ export class GuildPlayer extends EventEmitter {
       this.currentTrackRetryCount = 0;
       this.emitStateChange();
       setTimeout(() => {
-        this.primeUpcomingDecks(3);
+        this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
       }, 1000);
     });
 
@@ -601,7 +611,7 @@ export class GuildPlayer extends EventEmitter {
    * Backward-compatible single-track standby prewarmer.
    */
   public async primeStandbyDeck(): Promise<void> {
-    await this.primeUpcomingDecks(3);
+    await this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
   }
 
   /**
@@ -646,7 +656,7 @@ export class GuildPlayer extends EventEmitter {
         `[GuildPlayer] 🚀 VIP Single Request "${track.title}" is now pre-buffered in RAM! Promoted to Up Next (queue[0]).`
       );
       this.emitStateChange();
-      this.primeUpcomingDecks(3);
+      this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
       return true;
     };
 
@@ -674,7 +684,7 @@ export class GuildPlayer extends EventEmitter {
     }
 
     // 3. Trigger standby priming for upcoming tracks including this one
-    this.primeUpcomingDecks(3);
+    this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
 
     // 4. Listen for standby ready event with a watchdog timeout
     return new Promise<boolean>((resolve) => {
@@ -867,7 +877,7 @@ export class GuildPlayer extends EventEmitter {
       this.startTrackPlayback(nextTrack);
 
       // Trigger prewarmer for upcoming decks in queue
-      this.primeUpcomingDecks(3);
+      this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
 
       // Replenish buffer if queue is running low
       if (this.autoplayEnabled && this.queue.length < 5) {
@@ -1064,7 +1074,7 @@ export class GuildPlayer extends EventEmitter {
 
         if (!this.currentTrack) return;
         await this.executeBurstHandover(this.currentTrack);
-        this.primeUpcomingDecks(3);
+        this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
       }, 400);
 
       return true;
@@ -1165,7 +1175,7 @@ export class GuildPlayer extends EventEmitter {
     if (purgedCount > 0) {
       console.log(`[GuildPlayer] 🔄 Recurating autoplay buffer: refreshed ${purgedCount} tail tracks to reflect listener consensus.`);
       await this.replenishAutoplayBuffer();
-      this.primeUpcomingDecks(keepTopUpcoming ? 2 : 3);
+      this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
       this.emitStateChange();
     }
   }
