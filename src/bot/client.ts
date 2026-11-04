@@ -260,24 +260,25 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
         return;
       }
 
+      if (customId === 'btn_ui_replay') {
+        await handleReplay(interaction as any, player);
+        playerUi.scheduleUpdate(false);
+        return;
+      }
+
+      if (customId === 'btn_ui_shuffle') {
+        await handleShuffle(interaction as any, player);
+        playerUi.scheduleUpdate(false);
+        return;
+      }
+
       if (customId === 'btn_ui_like') {
-        const current = player.currentTrack;
-        if (!current) {
-          await interaction.reply({ content: '🔇 Nothing is currently playing.', ephemeral: true });
-          return;
-        }
-        try {
-          const now = Math.floor(Date.now() / 1000);
-          sqlite.prepare(`
-            INSERT INTO user_preferences (user_id, target_type, target_key, display_name, likes, affinity_score, updated_at)
-            VALUES (?, 'song', ?, ?, 1, 3.0, ?)
-            ON CONFLICT(user_id, target_type, target_key) DO UPDATE SET
-              likes = likes + 1,
-              affinity_score = ((likes + 1) * 3.0) + (full_plays * 1.0) - (early_skips * 1.5) - (dislikes * 4.0),
-              updated_at = ?
-          `).run(interaction.user.id, current.id, current.title, now, now);
-        } catch {}
-        await interaction.reply({ content: `❤️ Saved **${current.title}** to your favorites! (+3.0 affinity)`, ephemeral: true });
+        await handleLike(interaction as any, player);
+        return;
+      }
+
+      if (customId === 'btn_ui_dislike') {
+        await handleDislike(interaction as any, player);
         return;
       }
 

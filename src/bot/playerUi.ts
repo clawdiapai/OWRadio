@@ -21,6 +21,7 @@ import {
   Events,
 } from 'discord.js';
 import type { GuildPlayer, PlayerStatePayload } from '../player/GuildPlayer.js';
+import config from '../config.js';
 import { getBotState, setBotState, sqlite } from '../db/index.js';
 import featureFlags from '../services/featureFlags.js';
 import stationCurator from '../services/stationCurator.js';
@@ -33,15 +34,15 @@ function formatDuration(sec: number): string {
   return `${m}:${s}`;
 }
 
-function buildProgressBar(elapsedSec: number, durationSec: number, totalSegments = 12): string {
+function buildProgressBar(elapsedSec: number, durationSec: number, totalSegments = 14): string {
   if (durationSec <= 0 || isNaN(durationSec)) {
-    return '🔘' + '▬'.repeat(totalSegments);
+    return '─'.repeat(totalSegments);
   }
   const ratio = Math.max(0, Math.min(1, elapsedSec / durationSec));
   const pos = Math.round(ratio * totalSegments);
-  const left = '▬'.repeat(Math.max(0, pos));
-  const right = '▬'.repeat(Math.max(0, totalSegments - pos));
-  return `${left}🔘${right}`;
+  const left = '━'.repeat(Math.max(0, pos));
+  const right = '─'.repeat(Math.max(0, totalSegments - pos));
+  return `${left}●${right}`;
 }
 
 export class PlayerUiService {
@@ -88,6 +89,13 @@ export class PlayerUiService {
     });
 
     console.log('[PlayerUi] ✨ Minimal Sleek Discord UI service initialized.');
+
+    // Clean up any ghost messages left behind by prior bot sessions on startup
+    setTimeout(() => {
+      this.resolveChannel().then((ch) => {
+        if (ch) this.purgeOldBotMessages(ch, this.currentMessageId || undefined);
+      }).catch(() => {});
+    }, 1500);
   }
 
   /**
@@ -334,15 +342,12 @@ export class PlayerUiService {
       const oldId = this.currentMessageId;
       const newMsg = await (channel as any).send({ embeds: [embed], components });
       this.currentMessageId = newMsg.id;
+      setBotState('last_ui_message_id', newMsg.id);
       this.lastResendTimestamp = Date.now();
       console.log(`[PlayerUi] 🎵 Now Playing UI rendered at channel bottom (msgId: ${newMsg.id}, channel: ${(channel as any).name || channel.id})`);
 
-      // Safely delete the old message in the background
-      if (oldId && oldId !== newMsg.id) {
-        channel.messages.fetch(oldId)
-          .then((oldMsg) => oldMsg?.delete().catch(() => {}))
-          .catch(() => {});
-      }
+      // CRITICAL: Clean up ALL older messages sent by this bot to guarantee strictly 1 living message
+      this.purgeOldBotMessages(channel, newMsg.id).catch(() => {});
     } catch (err) {
       console.warn('[PlayerUi] Failed to render UI message:', (err as Error).message);
     } finally {
@@ -355,7 +360,36 @@ export class PlayerUiService {
   }
 
   /**
-   * Generates the minimal sleek embed and interactive action row.
+   * Purges all older messages sent by this bot in the target channel to guarantee
+   * strictly ONE living Now Playing widget exists (self-cleaning guarantee).
+   */
+  public async purgeOldBotMessages(channel: TextBasedChannel, keepMsgId?: string): Promise<void> {
+    try {
+      if (!this.client?.user) return;
+      const botUserId = this.client.user.id;
+      const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+      if (!messages) return;
+
+      const toDelete = messages.filter(
+        (m) => m.author.id === botUserId && m.id !== keepMsgId
+      );
+
+      for (const [_id, msg] of toDelete) {
+        try {
+          await msg.delete().catch(() => {});
+        } catch {}
+      }
+
+      if (toDelete.size > 0) {
+        console.log(`[PlayerUi] 🧹 Cleaned up ${toDelete.size} old bot message(s) in channel.`);
+      }
+    } catch (err) {
+      console.warn('[PlayerUi] Error during bot message cleanup:', (err as Error).message);
+    }
+  }
+
+  /**
+   * Generates the high-fidelity studio HUD embed and symmetrical 2-row interactive controls.
    */
   private buildUiPayload(state: PlayerStatePayload): {
     embed: EmbedBuilder;
@@ -364,41 +398,40 @@ export class PlayerUiService {
     const track = state.track!;
     const isPaused = this.player?.isPaused ?? false;
 
-    // Theme color based on curation mode
-    let themeColor = 0x5865f2; // Default Blurple
-    let modeBadge = '⚡ Hi-Fi Stream';
+    // Dynamic theme color and mode indicator
+    let themeColor = 0x6366f1; // Indigo / Studio Violet
+    let modeBadge = '⚡ 24-BIT HI-FI STREAM';
 
     if (state.radioStation) {
-      themeColor = 0x3498db; // Sky Blue
-      modeBadge = `📻 Station • ${state.radioStation.name}`;
+      themeColor = 0x38bdf8; // Sky Blue
+      modeBadge = `📻 STATION • ${state.radioStation.name.toUpperCase()}`;
     } else if (state.timeCapsuleYear) {
-      themeColor = 0xf1c40f; // Gold
-      modeBadge = `⏳ Time Capsule • ${state.timeCapsuleYear}`;
+      themeColor = 0xf59e0b; // Gold
+      modeBadge = `⏳ TIME CAPSULE • YEAR ${state.timeCapsuleYear}`;
     } else if (state.morph?.active) {
-      themeColor = 0xe91e63; // Magenta
-      modeBadge = `🌀 DJ Morph • Step ${state.morph.step}/${state.morph.totalSteps}`;
+      themeColor = 0xec4899; // Magenta
+      modeBadge = `🌀 DJ MORPH • STEP ${state.morph.step}/${state.morph.totalSteps}`;
     } else if (track.curatedBy === 'AI Vibe Mix') {
-      themeColor = 0x9b59b6; // Purple
-      modeBadge = '✨ AI Vibe Mix';
+      themeColor = 0xa855f7; // Purple
+      modeBadge = '✨ AI VIBE MIX';
     } else if (track.curatedBy === 'User Request' || track.isManualRequest) {
       if (track.requestType === 'playlist') {
-        themeColor = 0x3498db; // Sky Blue
-        modeBadge = track.playlistTitle ? `📋 ${track.playlistTitle}` : '📋 Blended Playlist';
+        themeColor = 0x3b82f6; // Blue
+        modeBadge = track.playlistTitle ? `📋 ${track.playlistTitle.toUpperCase()}` : '📋 BLENDED PLAYLIST';
       } else {
-        themeColor = 0x2ecc71; // Emerald Green
-        modeBadge = '⭐ VIP Single Request';
+        themeColor = 0x10b981; // Emerald Green
+        modeBadge = '⭐ VIP SINGLE REQUEST';
       }
     }
 
     const elapsed = track.elapsedSec || 0;
     const duration = track.durationSec || 0;
-    const bar = buildProgressBar(elapsed, duration, 12);
-    const timeDisplay = `\`${formatDuration(elapsed)}\` ${bar} \`${formatDuration(duration)}\``;
+    const bar = buildProgressBar(elapsed, duration, 14);
 
     // Format listeners
     const listenerNames = state.roomListeners.length > 0
-      ? state.roomListeners.slice(0, 3).join(', ') + (state.roomListeners.length > 3 ? ` +${state.roomListeners.length - 3}` : '')
-      : 'Solo';
+      ? state.roomListeners.slice(0, 4).join(', ') + (state.roomListeners.length > 4 ? ` + ${state.roomListeners.length - 4}` : '')
+      : 'Solo Listener';
 
     // Format up next
     let upNextTag = '';
@@ -411,34 +444,59 @@ export class PlayerUiService {
     }
 
     const upNextText = state.upNext
-      ? `**${state.upNext.title}** by *${state.upNext.artist}*${upNextTag}`
+      ? `**${state.upNext.title}**\n*${state.upNext.artist}*${upNextTag}`
       : '*(Dynamic Autoplay Consensus)*';
+
+    const yearStr = track.releaseYear ? ` (${track.releaseYear})` : '';
+    const albumStr = track.album ? `  •  💿 *${track.album}${yearStr}*` : (yearStr ? `  •  📅 *${yearStr}*` : '');
+
+    const webBaseUrl = config.PUBLIC_URL || state.streamUrl?.replace('/stream.mp3', '') || `http://127.0.0.1:${config.WEB_PORT}`;
+    const cleanWebUrl = webBaseUrl.replace(/\/+$/, '');
+    const bitrate = dynamicSettings.getNumber('audio_mp3_bitrate_kbps', 192);
 
     const embed = new EmbedBuilder()
       .setColor(themeColor)
       .setAuthor({
-        name: `${isPaused ? '⏸️ PAUSED' : '🟢 NOW PLAYING'} • ${modeBadge}`,
+        name: `${isPaused ? '⏸️ PAUSED' : '🟢 NOW BROADCASTING'} • ${modeBadge}`,
         iconURL: this.client?.user?.displayAvatarURL() || undefined,
       })
-      .setTitle(`🎶 ${track.title}`)
-      .setURL(state.streamUrl && state.streamUrl.startsWith('http') ? state.streamUrl : null)
+      .setTitle(`🎵 ${track.title}`)
+      .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `http://${cleanWebUrl}`)
       .setDescription(
-        `### **${track.artist}**${track.album ? ` • *${track.album}*` : ''}\n\n` +
-        `${timeDisplay}\n\n` +
-        `> ⏭️ **Up Next:** ${upNextText}\n` +
-        `> 🎧 **Listeners:** ${listenerNames} • 🔊 **Vol:** \`${state.volume}%\`` +
-        (track.curationReason ? `\n> 💡 *${track.curationReason}*` : '')
+        `🎤 **${track.artist}**${albumStr}\n\n` +
+        `▶ \`${formatDuration(elapsed)}\`  ${bar}  \`${formatDuration(duration)}\`  •  🔊 \`${state.volume}%\``
       )
-      .setFooter({
-        text: `VEXO 2.0 • 384-d JEPA Latent Audio • Queue: ${state.queueLength} tracks`,
+      .addFields(
+        {
+          name: '⏭️ Next in Rotation',
+          value: upNextText,
+          inline: true,
+        },
+        {
+          name: '👥 Voice Room',
+          value: listenerNames,
+          inline: true,
+        }
+      );
+
+    if (track.curationReason) {
+      embed.addFields({
+        name: '✨ Curation Vibe',
+        value: `*${track.curationReason}*`,
+        inline: false,
       });
+    }
+
+    embed.setFooter({
+      text: `OWRadio Engine • ${bitrate} kbps Lossless PCM • Queue: ${state.queueLength} tracks`,
+    });
 
     if (track.artworkUrl) {
       embed.setThumbnail(track.artworkUrl);
     }
 
-    // 5 Minimal Sleek Control Buttons (fits in 1 ActionRow)
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    // Row 1: Primary Playback Controls (5 buttons)
+    const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId('btn_ui_play_pause')
         .setEmoji(isPaused ? '▶️' : '⏸️')
@@ -448,25 +506,49 @@ export class PlayerUiService {
         .setCustomId('btn_ui_skip')
         .setEmoji('⏭️')
         .setLabel('Skip')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('btn_ui_replay')
+        .setEmoji('🔄')
+        .setLabel('Replay')
         .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('btn_ui_shuffle')
+        .setEmoji('🔀')
+        .setLabel('Shuffle')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('btn_ui_vibe')
+        .setEmoji('✨')
+        .setLabel('Vibe')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    // Row 2: Taste, Queue & Web Dashboard (4 buttons)
+    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId('btn_ui_like')
         .setEmoji('❤️')
         .setLabel('Like')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId('btn_ui_vibe')
-        .setEmoji('✨')
-        .setLabel('Vibe')
+        .setCustomId('btn_ui_dislike')
+        .setEmoji('💔')
+        .setLabel('Dislike')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId('btn_ui_queue')
         .setEmoji('📋')
         .setLabel('Queue')
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setLabel('Web Radio')
+        .setEmoji('🌐')
+        .setStyle(ButtonStyle.Link)
+        .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `http://${cleanWebUrl}`)
     );
 
-    return { embed, components: [row] };
+    return { embed, components: [row1, row2] };
   }
 
   /**
