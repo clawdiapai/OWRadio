@@ -1716,6 +1716,58 @@ function initWaveform() {
   renderWave();
 }
 
+const CAMELOT_KEYS = [
+  '1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B',
+  '5A', '5B', '6A', '6B', '7A', '7B', '8A', '8B',
+  '9A', '9B', '10A', '10B', '11A', '11B', '12A', '12B',
+];
+
+const STANDARD_KEY_MAP = {
+  'abm': '1A', 'g#m': '1A', 'b': '1B',
+  'ebm': '2A', 'd#m': '2A', 'f#': '2B', 'gb': '2B',
+  'bbm': '3A', 'a#m': '3A', 'db': '3B', 'c#': '3B',
+  'fm': '4A', 'ab': '4B',
+  'cm': '5A', 'eb': '5B',
+  'gm': '6A', 'bb': '6B',
+  'dm': '7A', 'f': '7B',
+  'am': '8A', 'c': '8B',
+  'em': '9A', 'g': '9B',
+  'bm': '10A', 'd': '10B',
+  'f#m': '11A', 'gbm': '11A', 'a': '11B',
+  'c#m': '12A', 'dbm': '12A', 'e': '12B',
+};
+
+function stringHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash;
+}
+
+function estimateTrackBpm(title, artist) {
+  const t = (title || '').toLowerCase();
+  const a = (artist || '').toLowerCase();
+  const hash = stringHash(`${t}::${a}`);
+  return 95 + (Math.abs(hash) % 40); // 95 - 134 bpm
+}
+
+function estimateTrackKey(title, artist) {
+  const t = (title || '').toLowerCase();
+  const a = (artist || '').toLowerCase();
+  const hash = stringHash(`${a} - ${t}`);
+  const camelot = CAMELOT_KEYS[Math.abs(hash) % CAMELOT_KEYS.length];
+  let keyName = camelot;
+  for (const [name, cam] of Object.entries(STANDARD_KEY_MAP)) {
+    if (cam === camelot) {
+      keyName = name.toUpperCase();
+      break;
+    }
+  }
+  return { camelot, key: keyName };
+}
+
 function updateWaveformCues() {
   const bpmTag = document.getElementById('waveform-bpm-tag');
   const keyTag = document.getElementById('waveform-key-tag');
@@ -1738,13 +1790,20 @@ function updateWaveformCues() {
   const remaining = Math.max(0, (t.durationSec || 0) - (t.elapsedSec || 0));
 
   const bpm = t.bpm || estimateTrackBpm(t.title, t.artist);
-  const keyInfo = t.camelot ? { camelot: t.camelot, key: t.key || '' } : estimateTrackKey(t.title, t.artist);
+  const keyInfo = (t.camelot && t.key)
+    ? { camelot: t.camelot, key: t.key }
+    : (t.camelot ? { camelot: t.camelot, key: t.camelot } : estimateTrackKey(t.title, t.artist));
 
   if (bpmTag) bpmTag.innerText = `BPM: ~${bpm}`;
-  if (keyTag) keyTag.innerText = `Key: ${keyInfo.key} (${keyInfo.camelot})`;
+  if (keyTag) {
+    const keyDisplay = keyInfo.key && keyInfo.key !== keyInfo.camelot
+      ? `${keyInfo.key} (${keyInfo.camelot})`
+      : (keyInfo.camelot || '--');
+    keyTag.innerText = `Key: ${keyDisplay}`;
+  }
 
   if (remaining <= 8 && remaining > 0) {
-    if (dropTag) dropTag.innerText = `Transitioning in ${Math.ceil(remaining)}s`;
+    if (dropTag) dropTag.innerText = `Drop / Cue: in ${Math.ceil(remaining)}s`;
     if (cueBadge) {
       cueBadge.innerText = '⚡ CROSSFADE CUE';
       cueBadge.style.color = '#ec4899';
@@ -1752,14 +1811,14 @@ function updateWaveformCues() {
     }
   } else if (remaining > 8) {
     const dropIn = Math.max(0, remaining - 8);
-    if (dropTag) dropTag.innerText = `Outro transition: in ${formatTime(dropIn)}`;
+    if (dropTag) dropTag.innerText = `Drop / Cue: in ${formatTime(dropIn)}`;
     if (cueBadge) {
       cueBadge.innerText = 'HARMONIC MIX READY';
       cueBadge.style.color = '#38bdf8';
       cueBadge.style.borderColor = 'rgba(56, 189, 248, 0.3)';
     }
   } else {
-    if (dropTag) dropTag.innerText = 'Outro: 0:00';
+    if (dropTag) dropTag.innerText = 'Drop / Cue: 0:00';
   }
 }
 

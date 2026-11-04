@@ -4,6 +4,7 @@
  */
 
 import type { DeezerTrackMetadata } from '../services/deezer.js';
+import { harmonicMixing } from '../services/harmonicMixing.js';
 
 export type RequestType = 'single' | 'playlist' | 'autoplay';
 
@@ -25,6 +26,9 @@ export interface AudioTrackOptions {
   curatedBy?: string;
   curationReason?: string;
   isrc?: string;
+  bpm?: number;
+  key?: string;
+  camelot?: string;
 }
 
 export class AudioTrack {
@@ -45,6 +49,9 @@ export class AudioTrack {
   public readonly curatedBy: string;
   public readonly curationReason?: string;
   public readonly isrc?: string;
+  public readonly bpm: number;
+  public readonly key: string;
+  public readonly camelot: string;
 
   /** Resolved HTTP stream URL for audio decoding */
   public streamUrl?: string;
@@ -71,6 +78,11 @@ export class AudioTrack {
     this.curatedBy = opts.curatedBy || (opts.isManualRequest ? 'User Request' : 'Autoplay');
     this.curationReason = opts.curationReason;
     this.isrc = opts.isrc;
+
+    const harmonic = harmonicMixing.analyzeTrack(opts.title, opts.artist, opts.bpm, opts.key || opts.camelot);
+    this.bpm = opts.bpm || harmonic.bpm;
+    this.key = opts.key || harmonic.keyName;
+    this.camelot = opts.camelot || harmonic.key;
   }
 
   /**
@@ -173,6 +185,9 @@ export class AudioTrack {
       playlistTitle: this.playlistTitle || null,
       curatedBy: this.curatedBy,
       curationReason: this.curationReason || null,
+      bpm: this.bpm,
+      key: this.key,
+      camelot: this.camelot,
     };
   }
 
@@ -195,6 +210,9 @@ export class AudioTrack {
       playlistTitle: this.playlistTitle || null,
       curatedBy: this.curatedBy,
       curationReason: this.curationReason || null,
+      bpm: this.bpm,
+      key: this.key,
+      camelot: this.camelot,
     };
   }
 }
