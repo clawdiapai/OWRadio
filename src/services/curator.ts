@@ -196,10 +196,10 @@ export function isTrackAllowedByQualityFilters(title: string, artistName: string
   const lowerAlbum = (albumTitle || '').toLowerCase();
   const combined = `${lowerTitle} ${lowerArtist} ${lowerAlbum}`;
 
-  // 1. Live Recordings Filter
-  const liveFilter = dynamicSettings.getString('curation_filter_live', 'high_quality');
-  const isLive = /\b(live|in concert|live at|live from|tour|unplugged|live session|live lounge)\b/i.test(combined);
-  const isAmateurLive = /\b(fancam|phone recording|audience recording|crowd audio|cam recording|bootleg live|crowd noise|recorded from crowd|handheld|distorted audio)\b/i.test(combined);
+  // 1. Live Recordings Filter (Strict studio default)
+  const liveFilter = dynamicSettings.getString('curation_filter_live', 'none');
+  const isLive = /\b(live|in concert|live at|live from|tour|unplugged|live session|live lounge|alive|live album|on stage|woodstock)\b/i.test(combined);
+  const isAmateurLive = /\b(fancam|phone recording|audience recording|crowd audio|cam recording|bootleg live|crowd noise|recorded from crowd|handheld|distorted audio|wildwood)\b/i.test(combined);
 
   if (isLive) {
     if (liveFilter === 'none') {
@@ -210,8 +210,8 @@ export function isTrackAllowedByQualityFilters(title: string, artistName: string
     }
   }
 
-  // 2. Cover Tracks Filter
-  const coverFilter = dynamicSettings.getString('curation_filter_covers', 'high_quality');
+  // 2. Cover Tracks Filter (Original artists default)
+  const coverFilter = dynamicSettings.getString('curation_filter_covers', 'none');
   const isCover = /\b(cover|tribute|sung by|karaoke|acoustic cover|cover by|tribute band)\b/i.test(combined);
   const isAmateurCover = /\b(bedroom cover|acoustic cover|cover by|tribute band|fan cover|reaction|guitar cover|drum cover|piano cover|vocal cover)\b/i.test(combined);
 
@@ -224,8 +224,8 @@ export function isTrackAllowedByQualityFilters(title: string, artistName: string
     }
   }
 
-  // 3. Instrumental Tracks Filter
-  const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'high_quality');
+  // 3. Instrumental Tracks Filter (Vocal tracks default)
+  const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'none');
   const isInstrumental = /\b(instrumental|backing track|minus one|karaoke|karaoke version|no vocals|off vocal)\b/i.test(combined);
   const isLowQualityInstrumental = /\b(backing track|minus one|karaoke|type beat|fan instrumental|midi)\b/i.test(combined);
 
@@ -238,8 +238,15 @@ export function isTrackAllowedByQualityFilters(title: string, artistName: string
     }
   }
 
-  // 4. Remixes & Edits Filter
-  const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'high_quality');
+  // 4. Re-Recorded Versions Filter (Original vintage masters default)
+  const rerecordedFilter = dynamicSettings.getString('curation_filter_rerecorded', 'none');
+  const isRerecorded = /\b(re-recorded|rerecorded|re-recording|re-record|new version|20\d\d version|re-cut|later recording|acoustic remake)\b/i.test(combined);
+  if (isRerecorded && rerecordedFilter === 'none') {
+    return false; // Original masters only
+  }
+
+  // 5. Remixes & Edits Filter (Original mixes default)
+  const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'none');
   const isRemix = /\b(remix|vip mix|club mix|extended mix|radio edit|dub mix)\b/i.test(combined);
   const isJunkRemix = /\b(nightcore|slowed \+ reverb|slowed and reverb|bass boosted|8d audio|earrape|lofi remix|tiktok remix|tik tok remix|bootleg remix|meme remix)\b/i.test(combined);
 
@@ -269,7 +276,8 @@ export function isTrackEligibleForAutoplay(
   title?: string,
   queuedDedupeKeys: Set<string> = new Set(),
   durationSec?: number,
-  queuedLanguages: Set<string> = new Set()
+  queuedLanguages: Set<string> = new Set(),
+  isrc?: string
 ): boolean {
   // 0. Autoplay Duration Limits (Hard bounds: 60s to 480s / 8 minutes maximum)
   const maxDurationSec = dynamicSettings.getNumber('curation_max_autoplay_duration_sec', 480);
@@ -354,7 +362,7 @@ export function isTrackEligibleForAutoplay(
   // Ensures foreign language tracks (French, Spanish, German, etc.) do not repeat within cooldown window
   const langCooldownMinutes = dynamicSettings.getNumber('curation_language_cooldown_minutes', 120);
   if (langCooldownMinutes > 0) {
-    const trackLang = detectTrackLanguage(title || '', artistName);
+    const trackLang = detectTrackLanguage(title || '', artistName, undefined, isrc, songId);
     if (trackLang !== 'en') {
       // 4A. In-memory queue check: no two songs in the same foreign language can be active or queued
       if (queuedLanguages && queuedLanguages.has(trackLang)) {
@@ -495,7 +503,7 @@ async function getDynamicFallbackTrack(
       if (artistId) {
         const topTracks = await deezer.getArtistTopTracks(artistId, 15);
         for (const track of topTracks) {
-          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
+          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages, track.isrc)) {
             return {
               track,
               curatedBy: 'Dynamic Taste Deep-Cut',
@@ -519,7 +527,7 @@ async function getDynamicFallbackTrack(
         const deepCuts = await collaborativeGraph.getDeepCutsForArtists(relatedNames, 5, 3);
         const shuffled = fisherYatesShuffle(deepCuts);
         for (const track of shuffled) {
-          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
+          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages, track.isrc)) {
             return {
               track,
               curatedBy: 'Dynamic Taste Deep-Cut',
@@ -564,7 +572,7 @@ async function getDynamicFallbackTrack(
 
     const shuffled = fisherYatesShuffle(candidates);
     for (const track of shuffled) {
-      if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
+      if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages, track.isrc)) {
         return {
           track,
           curatedBy,
@@ -582,7 +590,7 @@ async function getDynamicFallbackTrack(
   const charts = await deezer.getRandomChartTracks(selectedGenre, 50);
   const shuffledCharts = fisherYatesShuffle(charts);
   for (const track of shuffledCharts) {
-    if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
+    if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages, track.isrc)) {
       return {
         track,
         curatedBy: 'Dynamic Era Roulette',
@@ -648,13 +656,13 @@ export async function getNextAutoplayTracks(
         queuedArtists
       );
       for (const track of tcTracks) {
-        if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
+        if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages, (track as any).isrc)) {
           queuedSongIds.add(track.id);
           queuedArtists.add(track.artist.toLowerCase());
           const normA = normalizeArtist(track.artist).replace(/\s+/g, '');
           if (normA) queuedArtists.add(normA);
           queuedDedupeKeys.add(getTrackDedupeKey(track.title, track.artist));
-          const lang = detectTrackLanguage(track.title, track.artist);
+          const lang = detectTrackLanguage(track.title, track.artist, undefined, (track as any).isrc, track.id);
           if (lang !== 'en') queuedLanguages.add(lang);
           results.push({
             track,
@@ -681,7 +689,7 @@ export async function getNextAutoplayTracks(
       const normA = normalizeArtist(collTrack.track.artist).replace(/\s+/g, '');
       if (normA) queuedArtists.add(normA);
       queuedDedupeKeys.add(getTrackDedupeKey(collTrack.track.title, collTrack.track.artist));
-      const lang = detectTrackLanguage(collTrack.track.title, collTrack.track.artist);
+      const lang = detectTrackLanguage(collTrack.track.title, collTrack.track.artist, undefined, collTrack.track.isrc, collTrack.track.id);
       if (lang !== 'en') queuedLanguages.add(lang);
       results.push(collTrack);
     }
@@ -776,7 +784,7 @@ export async function getNextAutoplayTracks(
     const normA = normalizeArtist(fallbackResult.track.artist).replace(/\s+/g, '');
     if (normA) queuedArtists.add(normA);
     queuedDedupeKeys.add(getTrackDedupeKey(fallbackResult.track.title, fallbackResult.track.artist));
-    const lang = detectTrackLanguage(fallbackResult.track.title, fallbackResult.track.artist);
+    const lang = detectTrackLanguage(fallbackResult.track.title, fallbackResult.track.artist, undefined, fallbackResult.track.isrc, fallbackResult.track.id);
     if (lang !== 'en') queuedLanguages.add(lang);
     results.push(fallbackResult);
 

@@ -177,7 +177,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     description: 'Control how cover songs and artist tributes are curated.',
     type: 'string',
     control: 'radio',
-    defaultValue: 'high_quality',
+    defaultValue: 'none',
     options: [
       { label: '🚫 No Covers', value: 'none', description: 'Original artists only. Rejects all covers, karaoke, and tributes.' },
       { label: '⭐ High Quality Covers', value: 'high_quality', description: 'Allows notable / verified artist covers; rejects amateur bedroom/karaoke covers.' },
@@ -191,7 +191,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     description: 'Control how instrumental and karaoke audio is curated.',
     type: 'string',
     control: 'radio',
-    defaultValue: 'high_quality',
+    defaultValue: 'none',
     options: [
       { label: '🚫 No Instrumentals', value: 'none', description: 'Vocal tracks only. Rejects karaoke, backing tracks, and instrumental cuts.' },
       { label: '⭐ High Quality Instrumentals', value: 'high_quality', description: 'Allows official studio instrumentals and orchestral scores; rejects generic karaoke/backing tracks.' },
@@ -205,11 +205,24 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     description: 'Control how remixes, edits, and VIP versions are curated.',
     type: 'string',
     control: 'radio',
-    defaultValue: 'high_quality',
+    defaultValue: 'none',
     options: [
       { label: '🚫 No Remixes', value: 'none', description: 'Original album / single master only. Rejects all remixes and edits.' },
       { label: '⭐ High Quality Remixes', value: 'high_quality', description: 'Allows official artist VIP/club remixes; rejects unofficial bootlegs, nightcore, slowed+reverb.' },
       { label: '📻 Any Remixes', value: 'any', description: 'Allows all remixes and bootlegs.' },
+    ],
+  },
+  {
+    key: 'curation_filter_rerecorded',
+    category: 'Curation',
+    name: 'Re-Recorded Versions Filter',
+    description: 'Control whether vintage tracks re-recorded decades later are allowed.',
+    type: 'string',
+    control: 'radio',
+    defaultValue: 'none',
+    options: [
+      { label: '🚫 Original Masters Only', value: 'none', description: 'Strictly original vintage recordings only. Rejects modern re-recordings (e.g. 2014 re-recordings, later remakes).' },
+      { label: '📻 Any Version', value: 'any', description: 'Allows modern re-recorded versions and later studio cuts.' },
     ],
   },
   {

@@ -93,9 +93,7 @@ export class PlayerUiService {
 
     // Clean up any ghost messages left behind by prior bot sessions on startup
     setTimeout(() => {
-      this.resolveChannel().then((ch) => {
-        if (ch) this.purgeOldBotMessages(ch, this.currentMessageId || undefined);
-      }).catch(() => {});
+      this.sweepAllGuildChannelsForGhostMessages().catch(() => {});
     }, 1500);
   }
 
@@ -364,6 +362,26 @@ export class PlayerUiService {
    * Purges all older messages sent by this bot in the target channel to guarantee
    * strictly ONE living Now Playing widget exists (self-cleaning guarantee).
    */
+  
+  /**
+   * Sweeps all cached text channels across connected guilds to purge dangling Now Playing widgets
+   * from previous sessions, guaranteeing strictly ONE active bot message exists server-wide.
+   */
+  public async sweepAllGuildChannelsForGhostMessages(): Promise<void> {
+    try {
+      if (!this.client?.user) return;
+      for (const [_, guild] of this.client.guilds.cache) {
+        for (const [_, ch] of guild.channels.cache) {
+          if (ch.isTextBased()) {
+            await this.purgeOldBotMessages(ch as TextBasedChannel, this.currentMessageId || undefined).catch(() => {});
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[PlayerUi] Ghost message sweep warning:', (err as Error).message);
+    }
+  }
+
   public async purgeOldBotMessages(channel: TextBasedChannel, keepMsgId?: string): Promise<void> {
     try {
       if (!this.client?.user) return;
@@ -383,15 +401,25 @@ export class PlayerUiService {
         return false;
       });
 
-      for (const [_id, msg] of toDelete) {
-        try {
+      if (toDelete.size === 0) return;
+
+      // Fast bulkDelete for messages under 14 days old (zero rate-limit, 1 network roundtrip)
+      if ('bulkDelete' in channel && typeof (channel as any).bulkDelete === 'function') {
+        const bulkEligible = toDelete.filter((m) => Date.now() - m.createdTimestamp < 14 * 24 * 3600 * 1000);
+        if (bulkEligible.size > 0) {
+          await (channel as any).bulkDelete(bulkEligible, true).catch(() => {});
+        }
+        const older = toDelete.filter((m) => Date.now() - m.createdTimestamp >= 14 * 24 * 3600 * 1000);
+        for (const [_id, msg] of older) {
           await msg.delete().catch(() => {});
-        } catch {}
+        }
+      } else {
+        for (const [_id, msg] of toDelete) {
+          await msg.delete().catch(() => {});
+        }
       }
 
-      if (toDelete.size > 0) {
-        console.log(`[PlayerUi] 🧹 Cleaned up ${toDelete.size} old bot message(s) in channel.`);
-      }
+      console.log(`[PlayerUi] 🧹 Cleaned up ${toDelete.size} old bot message(s) in channel ${(channel as any).name || channel.id}.`);
     } catch (err) {
       console.warn('[PlayerUi] Error during bot message cleanup:', (err as Error).message);
     }
@@ -504,8 +532,32 @@ export class PlayerUiService {
       embed.setThumbnail(track.artworkUrl);
     }
 
-    // Row 1: Primary Playback Controls (5 buttons)
+    // Extract Active Studio Guard Filters for HUD display
+    const liveSetting = dynamicSettings.getString('curation_filter_live', 'none');
+    const coverSetting = dynamicSettings.getString('curation_filter_covers', 'none');
+    const rerecordSetting = dynamicSettings.getString('curation_filter_rerecorded', 'none');
+    const liveBadge = liveSetting === 'none' ? '🚫 No Lives' : (liveSetting === 'high_quality' ? '⭐ HQ Lives' : '📻 Any Live');
+    const coverBadge = coverSetting === 'none' ? '🚫 No Covers' : (coverSetting === 'high_quality' ? '⭐ HQ Covers' : '📻 Any Cover');
+    const rerecordBadge = rerecordSetting === 'none' ? '🚫 Original Masters' : '📻 Any Cut';
+
+    embed.addFields({
+      name: '🎛️ Studio Guard',
+      value: `\`${liveBadge}\`  •  \`${coverBadge}\`  •  \`${rerecordBadge}\``,
+      inline: false,
+    });
+
+    const standbyDecks = dynamicSettings.getNumber('audio_standby_decks_count', 15);
+    embed.setFooter({
+      text: `VEXO 2.0 • ${standbyDecks} Standby Decks in RAM • ${bitrate} kbps Lossless PCM • Queue: ${state.queueLength} tracks`,
+    });
+
+    // Row 1: Primary Playback & Taste Controls (5 symmetrical buttons)
     const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId('btn_ui_replay')
+        .setEmoji('⏮️')
+        .setLabel('Replay')
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId('btn_ui_play_pause')
         .setEmoji(isPaused ? '▶️' : '⏸️')
@@ -517,25 +569,6 @@ export class PlayerUiService {
         .setLabel('Skip')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('btn_ui_replay')
-        .setEmoji('🔄')
-        .setLabel('Replay')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('btn_ui_shuffle')
-        .setEmoji('🔀')
-        .setLabel('Shuffle')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('btn_ui_vibe')
-        .setEmoji('✨')
-        .setLabel('Vibe')
-        .setStyle(ButtonStyle.Secondary)
-    );
-
-    // Row 2: Taste, Queue & Web Dashboard (4 buttons)
-    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
         .setCustomId('btn_ui_like')
         .setEmoji('❤️')
         .setLabel('Like')
@@ -544,6 +577,20 @@ export class PlayerUiService {
         .setCustomId('btn_ui_dislike')
         .setEmoji('💔')
         .setLabel('Dislike')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    // Row 2: Queue, Curation, Studio Guard & Web Studio (5 symmetrical buttons)
+    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId('btn_ui_vibe')
+        .setEmoji('✨')
+        .setLabel('Vibe')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('btn_ui_shuffle')
+        .setEmoji('🔀')
+        .setLabel('Shuffle')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId('btn_ui_queue')
@@ -551,7 +598,12 @@ export class PlayerUiService {
         .setLabel('Queue')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setLabel('Web Radio')
+        .setCustomId('btn_ui_filter')
+        .setEmoji('🎛️')
+        .setLabel('Filter')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setLabel('Web Studio')
         .setEmoji('🌐')
         .setStyle(ButtonStyle.Link)
         .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `https://${cleanWebUrl}`)

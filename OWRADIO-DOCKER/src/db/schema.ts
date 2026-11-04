@@ -40,6 +40,8 @@ export const songs = sqliteTable('songs', {
   energyLevel: integer('energy_level'),
   /** Serialized JSON array of semantic tags (e.g. ["synth-pop", "upbeat", "retro"]) */
   aiTagsJson: text('ai_tags_json'),
+  /** Primary detected language code (e.g. "en", "fr", "es", "de") */
+  detectedLanguage: text('detected_language'),
   /** Epoch timestamp in seconds when this record was created */
   createdAt: integer('created_at').notNull(),
 });
@@ -155,8 +157,21 @@ export const vetoedCatalog = sqliteTable('vetoed_catalog', {
   createdAt: integer('created_at').notNull(),
 });
 
+/**
+ * Track language classifications for foreign language anti-repetition cooldowns.
+ */
+export const trackLanguages = sqliteTable('track_languages', {
+  dedupeKey: text('dedupe_key').primaryKey(),
+  language: text('language').notNull(),
+  confidence: real('confidence').notNull().default(1.0),
+  source: text('source').notNull(),
+  detectedAt: integer('detected_at').notNull(),
+});
+
 export type Song = typeof songs.$inferSelect;
 export type NewSong = typeof songs.$inferInsert;
+export type TrackLanguageRow = typeof trackLanguages.$inferSelect;
+export type NewTrackLanguage = typeof trackLanguages.$inferInsert;
 export type PlaybackHistoryRow = typeof playbackHistory.$inferSelect;
 export type NewPlaybackHistory = typeof playbackHistory.$inferInsert;
 export type UserPreferenceRow = typeof userPreferences.$inferSelect;

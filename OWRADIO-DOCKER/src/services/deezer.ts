@@ -31,6 +31,8 @@ export interface DeezerTrackMetadata {
   previewUrl?: string;
   /** Popularity rank (0-1,000,000) */
   rank?: number;
+  /** International Standard Recording Code (e.g. "FRZ041800369") */
+  isrc?: string;
 }
 
 export interface DeezerArtistMetadata {
@@ -94,6 +96,7 @@ function normalizeTrack(item: any): DeezerTrackMetadata {
     releaseYear: Number.isNaN(releaseYear) ? undefined : releaseYear,
     previewUrl: item.preview || undefined,
     rank: item.rank,
+    isrc: item.isrc || undefined,
   };
 }
 

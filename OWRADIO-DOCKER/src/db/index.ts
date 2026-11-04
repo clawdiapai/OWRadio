@@ -137,7 +137,22 @@ function initSchema(): void {
       value TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     );
+
+    -- Track language classifications for foreign language anti-repetition cooldowns
+    CREATE TABLE IF NOT EXISTS track_languages (
+      dedupe_key TEXT PRIMARY KEY,
+      language TEXT NOT NULL,
+      confidence REAL NOT NULL DEFAULT 1.0,
+      source TEXT NOT NULL,
+      detected_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_track_languages_lang ON track_languages(language);
   `);
+
+  // Non-destructive migrations for existing tables
+  try {
+    sqlite.exec(`ALTER TABLE songs ADD COLUMN detected_language TEXT;`);
+  } catch {}
 }
 
 // Run bootstrapping immediately upon import

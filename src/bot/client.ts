@@ -76,6 +76,11 @@ import {
   handleMorph,
   handleVeto,
 } from './commands/features.js';
+import {
+  filterCommand,
+  handleFilterCommand,
+  handleFilterButtonInteraction,
+} from './commands/filter.js';
 
 const ALL_COMMANDS = [
   playCommand,
@@ -102,6 +107,7 @@ const ALL_COMMANDS = [
   radioCommand,
   morphCommand,
   vetoCommand,
+  filterCommand,
 ];
 
 export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
@@ -297,6 +303,11 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
         return;
       }
 
+      if (customId === 'btn_ui_filter' || customId.startsWith('btn_toggle_filter_') || customId === 'btn_filter_recurate_now') {
+        await handleFilterButtonInteraction(interaction as any, player);
+        return;
+      }
+
       if (customId === 'btn_vibe_steer_off') {
         vectorCurator.setVibeSteering('', null);
         await player.recurateAutoplayBuffer();
@@ -387,6 +398,9 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
           break;
         case 'leave':
           await handleLeave(interaction, player);
+          break;
+        case 'filter':
+          await handleFilterCommand(interaction, player);
           break;
         default:
           console.warn(`[DiscordBot] Unrecognized command: ${interaction.commandName}`);

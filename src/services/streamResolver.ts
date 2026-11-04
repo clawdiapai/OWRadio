@@ -73,14 +73,15 @@ function isVariantClean(candidateTitle: string, canonicalTitle: string): boolean
   const normCandidate = candidateTitle.toLowerCase();
   const normCanonical = canonicalTitle.toLowerCase();
 
-  const liveFilter = dynamicSettings.getString('curation_filter_live', 'high_quality');
-  const coverFilter = dynamicSettings.getString('curation_filter_covers', 'high_quality');
-  const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'high_quality');
-  const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'high_quality');
+  const liveFilter = dynamicSettings.getString('curation_filter_live', 'none');
+  const coverFilter = dynamicSettings.getString('curation_filter_covers', 'none');
+  const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'none');
+  const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'none');
+  const rerecordedFilter = dynamicSettings.getString('curation_filter_rerecorded', 'none');
 
   // Check live keywords if live is not set to 'any'
   if (liveFilter !== 'any') {
-    const liveWords = ['live at', 'live from', 'in concert', 'live 19', 'live 20', 'acoustic live', 'unplugged'];
+    const liveWords = ['live at', 'live from', 'in concert', 'live 19', 'live 20', 'acoustic live', 'unplugged', 'alive', 'live album', 'wildwood'];
     for (const w of liveWords) {
       if (normCandidate.includes(w) && !normCanonical.includes(w)) {
         return false;
@@ -90,7 +91,7 @@ function isVariantClean(candidateTitle: string, canonicalTitle: string): boolean
 
   // Check covers keywords if covers is not set to 'any'
   if (coverFilter !== 'any') {
-    const coverWords = ['acoustic cover', 'cover by', 'cover version', 'tribute band', 'karaoke'];
+    const coverWords = ['acoustic cover', 'cover by', 'cover version', 'tribute band', 'karaoke', 'fan cover'];
     for (const w of coverWords) {
       if (normCandidate.includes(w) && !normCanonical.includes(w)) {
         return false;
@@ -100,7 +101,7 @@ function isVariantClean(candidateTitle: string, canonicalTitle: string): boolean
 
   // Check instrumentals if instrumentals is not set to 'any'
   if (instrumentalFilter !== 'any') {
-    const instWords = ['instrumental', 'backing track', 'karaoke', 'minus one'];
+    const instWords = ['instrumental', 'backing track', 'karaoke', 'minus one', 'no vocals', 'off vocal'];
     for (const w of instWords) {
       if (normCandidate.includes(w) && !normCanonical.includes(w)) {
         return false;
@@ -112,6 +113,16 @@ function isVariantClean(candidateTitle: string, canonicalTitle: string): boolean
   if (remixFilter === 'none') {
     if (normCandidate.includes('remix') && !normCanonical.includes('remix')) {
       return false;
+    }
+  }
+
+  // Check re-recorded versions if rerecorded is 'none'
+  if (rerecordedFilter === 'none') {
+    const rerecordWords = ['re-recorded', 'rerecorded', 're-recording', 'new version', 're-cut', 're-record'];
+    for (const w of rerecordWords) {
+      if (normCandidate.includes(w) && !normCanonical.includes(w)) {
+        return false;
+      }
     }
   }
 
@@ -316,10 +327,11 @@ export async function resolveStream(
       }
 
       // Dynamic Granular Quality Scoring
-      const liveFilter = dynamicSettings.getString('curation_filter_live', 'high_quality');
-      const coverFilter = dynamicSettings.getString('curation_filter_covers', 'high_quality');
-      const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'high_quality');
-      const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'high_quality');
+      const liveFilter = dynamicSettings.getString('curation_filter_live', 'none');
+      const coverFilter = dynamicSettings.getString('curation_filter_covers', 'none');
+      const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'none');
+      const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'none');
+      const rerecordedFilter = dynamicSettings.getString('curation_filter_rerecorded', 'none');
 
       const isOriginalLive = track.title.toLowerCase().includes('live');
       if (titleLower.includes('live') && !isOriginalLive) {

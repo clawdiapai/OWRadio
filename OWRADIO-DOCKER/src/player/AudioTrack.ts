@@ -24,6 +24,7 @@ export interface AudioTrackOptions {
   playlistTitle?: string;
   curatedBy?: string;
   curationReason?: string;
+  isrc?: string;
 }
 
 export class AudioTrack {
@@ -43,6 +44,7 @@ export class AudioTrack {
   public readonly playlistTitle?: string;
   public readonly curatedBy: string;
   public readonly curationReason?: string;
+  public readonly isrc?: string;
 
   /** Resolved HTTP stream URL for audio decoding */
   public streamUrl?: string;
@@ -68,6 +70,7 @@ export class AudioTrack {
     this.playlistTitle = opts.playlistTitle;
     this.curatedBy = opts.curatedBy || (opts.isManualRequest ? 'User Request' : 'Autoplay');
     this.curationReason = opts.curationReason;
+    this.isrc = opts.isrc;
   }
 
   /**
@@ -100,6 +103,7 @@ export class AudioTrack {
       playlistTitle,
       curatedBy,
       curationReason,
+      isrc: meta.isrc,
     });
   }
 
