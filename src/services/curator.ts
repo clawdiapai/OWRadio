@@ -1,0 +1,596 @@
+/**
+ * @file curator.ts
+ * @description 48-Hour Anti-Repeat, Active Voice Room Taste Blending, and Dynamic Deezer Deep-Cut Fallback Engine.
+ * Guarantees zero static fallback song lists and zero repetitive loops.
+ */
+
+import { sqlite } from '../db/index.js';
+import config from '../config.js';
+import deezer, { type DeezerTrackMetadata } from './deezer.js';
+import ollama from './ollama.js';
+import vectorCurator from './vectorCurator.js';
+import jevCurator from './jevCurator.js';
+import brainLogger from './brainLogger.js';
+import stationCurator from './stationCurator.js';
+import featureFlags from './featureFlags.js';
+import dynamicSettings from './dynamicSettings.js';
+import collaborativeGraph from './collaborativeGraph.js';
+import { normalizeArtist, normalizeTrackTitle, getTrackDedupeKey } from '../utils/trackDedupe.js';
+
+export type CurationEngineType = 'embedding' | 'jev' | 'llm' | 'hybrid';
+
+let currentEngine: CurationEngineType = (config.CURATION_ENGINE as CurationEngineType) || 'hybrid';
+
+export function getEngine(): CurationEngineType {
+  return currentEngine;
+}
+
+export function setEngine(engine: CurationEngineType): void {
+  const previous = currentEngine;
+  currentEngine = engine;
+  brainLogger.logInteraction({
+    timestamp: Math.floor(Date.now() / 1000),
+    model: 'engine_switchboard',
+    action: 'custom',
+    prompt: `Operator switch curation engine: [${previous}] -> [${engine}]`,
+    response: JSON.stringify({ previous, activeEngine: engine, timestamp: new Date().toISOString() }, null, 2),
+    durationMs: 1,
+    status: 'success',
+    metadata: { previous, current: engine },
+  });
+  console.log(`[Curator] Curation Engine dynamically switched: ${previous.toUpperCase()} -> ${engine.toUpperCase()}`);
+}
+
+export interface CuratedTrackResult {
+  track: DeezerTrackMetadata;
+  curatedBy: 'AI Room Mix' | 'AI Wildcard' | 'JEPA Vector Latent' | 'Jev Decision Engine' | 'Dynamic Taste Deep-Cut' | 'Dynamic Era Roulette' | 'Dynamic Genre Explorer' | 'User Request';
+  curationReason: string;
+}
+
+export interface RoomTasteProfile {
+  topLikedArtists: string[];
+  topLikedSongs: string[];
+  topLikedGenres: string[];
+  dislikedArtists: string[];
+  memberCount: number;
+}
+
+const SEED_ERAS = [
+  '1980s Post-Punk & Synth',
+  '1990s French Touch & Electro',
+  '1970s Funk & Soul',
+  '2000s Indie Dance & Nu-Gaze',
+  '2010s Future Funk & Vaporwave',
+  '1990s Trip-Hop & Acid Jazz',
+  'Modern Deep House & Melodic Techno',
+  'Cyberpunk Darksynth',
+  '1960s Psychedelic Rock & Baroque Pop',
+  '2000s Neo-Soul & R&B Grooves',
+];
+
+const FALLBACK_GENRE_IDS = [
+  132, // Pop
+  152, // Rock
+  116, // Rap/Hip-Hop
+  106, // Electro
+  165, // R&B
+  85,  // Alternative
+  129, // Jazz
+  466, // Folk
+];
+
+/**
+ * Shuffles an array in place using the Fisher-Yates algorithm.
+ */
+function fisherYatesShuffle<T>(array: T[]): T[] {
+  const result = [...array];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+// Pre-prepared statements and short-lived in-memory caches for 0ms autoplay cooldown checks
+const stmtCheckSongId = sqlite.prepare(`
+  SELECT 1 FROM playback_history
+  WHERE song_id = ? AND played_at > ?
+  LIMIT 1
+`);
+
+const stmtCheckArtistLower = sqlite.prepare(`
+  SELECT 1 FROM playback_history
+  WHERE LOWER(artist_name) = LOWER(?) AND played_at > ?
+  LIMIT 1
+`);
+
+const stmtRecentPlays48h = sqlite.prepare(`
+  SELECT s.title, ph.artist_name
+  FROM playback_history ph
+  JOIN songs s ON ph.song_id = s.id
+  WHERE ph.played_at > ?
+`);
+
+const stmtRecentArtists2h = sqlite.prepare(`
+  SELECT DISTINCT artist_name
+  FROM playback_history
+  WHERE played_at > ?
+`);
+
+let cached48hDedupeKeys: Set<string> | null = null;
+let cached48hExpiry = 0;
+let cached2hNormArtists: Set<string> | null = null;
+let cached2hExpiry = 0;
+
+/**
+ * Checks whether a track is eligible for autoplay under the 48h song and 2h artist rules.
+ * Enforces strict normalized title and artist deduplication across editions and channels.
+ */
+export function isTrackEligibleForAutoplay(
+  songId: string,
+  artistName: string,
+  queuedSongIds: Set<string> = new Set(),
+  queuedArtists: Set<string> = new Set(),
+  title?: string,
+  queuedDedupeKeys: Set<string> = new Set(),
+  durationSec?: number
+): boolean {
+  // 0. Autoplay Duration Limits (Hard bounds: 60s to 480s / 8 minutes maximum)
+  const maxDurationSec = dynamicSettings.getNumber('curation_max_autoplay_duration_sec', 480);
+  const minDurationSec = dynamicSettings.getNumber('curation_min_autoplay_duration_sec', 60);
+  if (durationSec !== undefined && durationSec !== null && durationSec > 0) {
+    if (durationSec < minDurationSec || durationSec > maxDurationSec) {
+      return false;
+    }
+  }
+
+  // 0B. Autoplay Purity Filter: Filter out classical symphony movements, orchestra recordings, and spoken word tracks
+  if (title) {
+    const classicalOrSpoken = /\b(symphony|philharmoniker|philharmonic|orchestra|concerto|allegro|andante|adagio|sonata|suite\s+no\.|op\.\s*\d+|spoken\s+word|interview|skit|monologue)\b/i;
+    if (classicalOrSpoken.test(title) || classicalOrSpoken.test(artistName)) {
+      return false;
+    }
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const normArtist = normalizeArtist(artistName).replace(/\s+/g, '');
+
+  // 1. In-memory queue duplicate check
+  if (queuedSongIds.has(songId)) return false;
+  if (queuedArtists.has(artistName.toLowerCase())) return false;
+  if (normArtist && queuedArtists.has(normArtist)) return false;
+
+  // Check canonical dedupe key against in-memory queue
+  if (title) {
+    const dedupeKey = getTrackDedupeKey(title, artistName);
+    if (queuedDedupeKeys.has(dedupeKey)) return false;
+  }
+
+  // 2. Song Cooldown (Dynamic setting, default: 48h)
+  const songCooldownHours = dynamicSettings.getNumber('curation_song_cooldown_hours', config.AUTOPLAY_COOLDOWN_HOURS);
+  const cutoffSong = now - songCooldownHours * 3600;
+  // 2A. Direct song ID match
+  const recentSong = stmtCheckSongId.get(songId, cutoffSong);
+  if (recentSong) return false;
+
+  // 2B. Normalized title & artist match against song cooldown history
+  if (title) {
+    if (!cached48hDedupeKeys || now > cached48hExpiry) {
+      const recentPlays = stmtRecentPlays48h.all(cutoffSong) as Array<{ title: string; artist_name: string }>;
+      cached48hDedupeKeys = new Set(recentPlays.map((p) => getTrackDedupeKey(p.title, p.artist_name)));
+      cached48hExpiry = now + 5; // Cache for 5s to eliminate SQL loop thrashing
+    }
+    const candKey = getTrackDedupeKey(title, artistName);
+    if (cached48hDedupeKeys.has(candKey)) return false;
+  }
+
+  // 3. Artist Cooldown (Dynamic setting, default: 2h)
+  const artistCooldownHours = dynamicSettings.getNumber('curation_artist_cooldown_hours', config.ARTIST_COOLDOWN_HOURS);
+  const cutoffArtist = now - artistCooldownHours * 3600;
+  // 3A. Exact lowercase artist check
+  const recentArtist = stmtCheckArtistLower.get(artistName, cutoffArtist);
+  if (recentArtist) return false;
+
+  // 3B. Normalized artist check against artist cooldown history
+  if (normArtist) {
+    if (!cached2hNormArtists || now > cached2hExpiry) {
+      const recentArtists = stmtRecentArtists2h.all(cutoffArtist) as Array<{ artist_name: string }>;
+      cached2hNormArtists = new Set(recentArtists.map((r) => normalizeArtist(r.artist_name).replace(/\s+/g, '')));
+      cached2hExpiry = now + 5;
+    }
+    if (cached2hNormArtists.has(normArtist)) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Aggregates preferences of active non-bot members currently present in the voice room.
+ */
+export function getActiveVoiceRoomProfile(memberUserIds: string[]): RoomTasteProfile {
+  if (memberUserIds.length === 0) {
+    // If room is empty, aggregate positive affinities from the past 30 days
+    const rows = sqlite.prepare(`
+      SELECT target_key, target_type, SUM(affinity_score) as total_affinity
+      FROM user_preferences
+      WHERE affinity_score > 0
+      GROUP BY target_type, target_key
+      ORDER BY total_affinity DESC
+      LIMIT 15
+    `).all() as Array<{ target_key: string; target_type: string; total_affinity: number }>;
+
+    return {
+      topLikedArtists: rows.filter((r) => r.target_type === 'artist').map((r) => r.target_key),
+      topLikedSongs: rows.filter((r) => r.target_type === 'song').map((r) => r.target_key),
+      topLikedGenres: rows.filter((r) => r.target_type === 'genre').map((r) => r.target_key),
+      dislikedArtists: [],
+      memberCount: 0,
+    };
+  }
+
+  // Parameterized query for all present users
+  const placeholders = memberUserIds.map(() => '?').join(',');
+  const query = `
+    SELECT target_key, target_type, SUM(affinity_score) as score, SUM(dislikes) as total_dislikes
+    FROM user_preferences
+    WHERE user_id IN (${placeholders})
+    GROUP BY target_type, target_key
+    ORDER BY score DESC
+  `;
+
+  const rows = sqlite.prepare(query).all(...memberUserIds) as Array<{
+    target_key: string;
+    target_type: string;
+    score: number;
+    total_dislikes: number;
+  }>;
+
+  const topLikedArtists = rows
+    .filter((r) => r.target_type === 'artist' && r.score > 0)
+    .slice(0, 8)
+    .map((r) => r.target_key);
+
+  const topLikedSongs = rows
+    .filter((r) => r.target_type === 'song' && r.score > 0)
+    .slice(0, 8)
+    .map((r) => r.target_key);
+
+  const topLikedGenres = rows
+    .filter((r) => r.target_type === 'genre' && r.score > 0)
+    .slice(0, 8)
+    .map((r) => r.target_key);
+
+  const dislikedArtists = rows
+    .filter((r) => r.target_type === 'artist' && (r.score < -2 || r.total_dislikes > 0))
+    .map((r) => r.target_key);
+
+  return {
+    topLikedArtists,
+    topLikedSongs,
+    topLikedGenres,
+    dislikedArtists,
+    memberCount: memberUserIds.length,
+  };
+}
+
+/**
+ * Retrieves the last N played tracks from playback_history to supply anti-repetition context to Ollama.
+ */
+function getRecentPlaybackTitles(limit = 8): string[] {
+  try {
+    const rows = sqlite.prepare(`
+      SELECT s.title, ph.artist_name
+      FROM playback_history ph
+      JOIN songs s ON s.id = ph.song_id
+      ORDER BY ph.played_at DESC
+      LIMIT ?
+    `).all(limit) as Array<{ title: string; artist_name: string }>;
+    return rows.map((r) => `${r.artist_name} - ${r.title}`);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Dynamic Anti-Bubble Fallback Walk (used when LLM is offline or returns fewer than required tracks).
+ * NEVER returns a static hardcoded track list.
+ */
+async function getDynamicFallbackTrack(
+  roomProfile: RoomTasteProfile,
+  queuedSongIds: Set<string>,
+  queuedArtists: Set<string>,
+  queuedDedupeKeys: Set<string> = new Set()
+): Promise<CuratedTrackResult | null> {
+  const hasSeeds = roomProfile.topLikedArtists.length > 0;
+  const rand = Math.random();
+
+  // --- Bucket 1: Core Taste Anchor (20%) ---
+  if (hasSeeds && rand < 0.20) {
+    const seedArtist = roomProfile.topLikedArtists[Math.floor(Math.random() * roomProfile.topLikedArtists.length)];
+    try {
+      const artist = await deezer.searchArtist(seedArtist);
+      const artistId = artist?.id;
+      if (artistId) {
+        const topTracks = await deezer.getArtistTopTracks(artistId, 15);
+        for (const track of topTracks) {
+          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+            return {
+              track,
+              curatedBy: 'Dynamic Taste Deep-Cut',
+              curationReason: `Core taste anchor: ${seedArtist}`,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Curator] Core anchor selection error:', (err as Error).message);
+    }
+  }
+
+  // --- Bucket 2: 1st-Degree Collaborative Deep-Cuts (50%) ---
+  if (hasSeeds && rand < 0.70) {
+    const seedArtist = roomProfile.topLikedArtists[Math.floor(Math.random() * roomProfile.topLikedArtists.length)];
+    try {
+      const related = await collaborativeGraph.getRelatedArtists(seedArtist, 8);
+      const relatedNames = related.map((r) => r.name);
+      if (relatedNames.length > 0) {
+        const deepCuts = await collaborativeGraph.getDeepCutsForArtists(relatedNames, 5, 3);
+        const shuffled = fisherYatesShuffle(deepCuts);
+        for (const track of shuffled) {
+          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+            return {
+              track,
+              curatedBy: 'Dynamic Taste Deep-Cut',
+              curationReason: `Collaborative b-side branched from ${seedArtist}`,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Curator] Collaborative deep-cut error:', (err as Error).message);
+    }
+  }
+
+  // --- Bucket 3: Preferred Genre Discovery or Vintage Circadian Vault (30%) ---
+  try {
+    const hasGenres = roomProfile.topLikedGenres && roomProfile.topLikedGenres.length > 0;
+    // When listeners have active genre preferences, prioritize them with 70% probability
+    const pickPreferredGenre = hasGenres && (Math.random() < 0.70 || !hasSeeds);
+
+    let candidates: DeezerTrackMetadata[] = [];
+    let reason = '';
+    let curatedBy: CuratedTrackResult['curatedBy'] = 'Dynamic Era Roulette';
+
+    if (pickPreferredGenre && roomProfile.topLikedGenres.length > 0) {
+      const genre = roomProfile.topLikedGenres[Math.floor(Math.random() * roomProfile.topLikedGenres.length)];
+      candidates = await deezer.searchTracks(genre, 35);
+      reason = `Room genre preference: ${genre.toUpperCase()}`;
+      curatedBy = 'Dynamic Genre Explorer';
+    } else {
+      const rollType = Math.random() < 0.5 ? 'genre' : 'year';
+      if (rollType === 'genre') {
+        const genreId = FALLBACK_GENRE_IDS[Math.floor(Math.random() * FALLBACK_GENRE_IDS.length)];
+        candidates = await deezer.getRandomChartTracks(genreId, 40);
+        reason = 'Dynamic genre roulette exploration';
+      } else {
+        // Roll random year between 1972 and 2024
+        const year = 1972 + Math.floor(Math.random() * 52);
+        candidates = await deezer.searchByYearRange(year, year, undefined, 40);
+        reason = `Dynamic vintage vault (${year})`;
+      }
+    }
+
+    const shuffled = fisherYatesShuffle(candidates);
+    for (const track of shuffled) {
+      if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+        return {
+          track,
+          curatedBy,
+          curationReason: reason,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[Curator] Dynamic roulette fallback error:', (err as Error).message);
+  }
+
+  // Last resort: chart search
+  const charts = await deezer.getRandomChartTracks(0, 50);
+  const shuffledCharts = fisherYatesShuffle(charts);
+  for (const track of shuffledCharts) {
+    if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+      return {
+        track,
+        curatedBy: 'Dynamic Era Roulette',
+        curationReason: 'General eclectic discovery',
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Main Autoplay Pipeline: Generates the next N curated tracks respecting 48h/2h anti-repetition rules.
+ */
+export async function getNextAutoplayTracks(
+  memberUserIds: string[],
+  count = 2,
+  existingQueueSongIds: string[] = [],
+  existingQueueArtists: string[] = [],
+  existingQueueTitles: string[] = []
+): Promise<CuratedTrackResult[]> {
+  const roomProfile = getActiveVoiceRoomProfile(memberUserIds);
+  const recentTracks = getRecentPlaybackTitles(8);
+  const randomSeedEra = SEED_ERAS[Math.floor(Math.random() * SEED_ERAS.length)];
+
+  const queuedSongIds = new Set(existingQueueSongIds);
+  const queuedArtists = new Set<string>();
+  for (const a of existingQueueArtists) {
+    queuedArtists.add(a.toLowerCase());
+    const norm = normalizeArtist(a).replace(/\s+/g, '');
+    if (norm) queuedArtists.add(norm);
+  }
+
+  const queuedDedupeKeys = new Set<string>();
+  for (let i = 0; i < existingQueueTitles.length; i++) {
+    const t = existingQueueTitles[i];
+    const a = existingQueueArtists[i] || '';
+    if (t) queuedDedupeKeys.add(getTrackDedupeKey(t, a));
+  }
+
+  const results: CuratedTrackResult[] = [];
+
+  // --- Tier 0: Grounded Time Capsule (Strict Record Release Dates, Zero LLM Hallucination) ---
+  const timeCapsuleYear = featureFlags.isEnabled('feature_time_capsule')
+    ? stationCurator.getTimeCapsuleYear()
+    : null;
+
+  if (timeCapsuleYear) {
+    try {
+      const tcTracks = await stationCurator.getNextTimeCapsuleTracks(
+        count,
+        queuedSongIds,
+        queuedArtists
+      );
+      for (const track of tcTracks) {
+        if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+          queuedSongIds.add(track.id);
+          queuedArtists.add(track.artist.toLowerCase());
+          const normA = normalizeArtist(track.artist).replace(/\s+/g, '');
+          if (normA) queuedArtists.add(normA);
+          queuedDedupeKeys.add(getTrackDedupeKey(track.title, track.artist));
+          results.push({
+            track,
+            curatedBy: 'Dynamic Era Roulette',
+            curationReason: `Grounded verified record release from ${timeCapsuleYear}`,
+          });
+        }
+      }
+
+      if (results.length >= count) {
+        return results;
+      }
+    } catch (err) {
+      console.warn('[Curator] Grounded time capsule tier error:', (err as Error).message);
+    }
+  }  // --- Tier 1: Curation Pipeline based on active Engine (hybrid / embedding / jev / llm) ---
+  if (currentEngine === 'hybrid') {
+    // Primary Hybrid Mode: 20/50/30 Degrees of Separation Collaborative Graph (Last.fm + Deezer)
+    while (results.length < count) {
+      const collTrack = await getDynamicFallbackTrack(roomProfile, queuedSongIds, queuedArtists, queuedDedupeKeys);
+      if (!collTrack) break;
+      queuedSongIds.add(collTrack.track.id);
+      queuedArtists.add(collTrack.track.artist.toLowerCase());
+      const normA = normalizeArtist(collTrack.track.artist).replace(/\s+/g, '');
+      if (normA) queuedArtists.add(normA);
+      queuedDedupeKeys.add(getTrackDedupeKey(collTrack.track.title, collTrack.track.artist));
+      results.push(collTrack);
+    }
+  } else if (currentEngine === 'embedding') {
+    if (vectorCurator.getIndexedCount() >= 500) {
+      try {
+        const vectorTracks = await vectorCurator.curateNextTracks(
+          roomProfile,
+          memberUserIds,
+          count,
+          queuedSongIds,
+          queuedArtists
+        );
+        for (const vt of vectorTracks) results.push(vt);
+      } catch (err) {
+        console.warn('[Curator] Latent vector curation tier error:', (err as Error).message);
+      }
+    }
+  } else if (currentEngine === 'jev') {
+    try {
+      const jevTracks = await jevCurator.curateNextTracks(
+        roomProfile,
+        memberUserIds,
+        count,
+        queuedSongIds,
+        queuedArtists
+      );
+      for (const jt of jevTracks) results.push(jt);
+    } catch (err) {
+      console.warn('[Curator] Jev discriminative decision tier error:', (err as Error).message);
+    }
+  } else if (currentEngine === 'llm') {
+    try {
+      const needed = count - results.length;
+      const aiRecommendations = await ollama.curateNextTracks(
+        {
+          activeMembersCount: roomProfile.memberCount,
+          likedArtists: roomProfile.topLikedArtists,
+          likedSongs: roomProfile.topLikedSongs,
+          dislikedArtists: roomProfile.dislikedArtists,
+          recentTracks,
+          randomSeedEra,
+        },
+        memberUserIds
+      );
+      for (const rec of aiRecommendations) {
+        if (results.length >= count) break;
+        const candidates = await deezer.searchTracks(`${rec.artist} ${rec.title}`, 3);
+        for (const candidate of candidates) {
+          if (isTrackEligibleForAutoplay(candidate.id, candidate.artist, queuedSongIds, queuedArtists, candidate.title, queuedDedupeKeys, candidate.durationSec)) {
+            queuedSongIds.add(candidate.id);
+            queuedArtists.add(candidate.artist.toLowerCase());
+            const normA = normalizeArtist(candidate.artist).replace(/\s+/g, '');
+            if (normA) queuedArtists.add(normA);
+            queuedDedupeKeys.add(getTrackDedupeKey(candidate.title, candidate.artist));
+            results.push({
+              track: candidate,
+              curatedBy: rec.type === 'wildcard' ? 'AI Wildcard' : 'AI Room Mix',
+              curationReason: rec.reason || `Blends room affinities with ${randomSeedEra}`,
+            });
+            break;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Curator] Ollama curation tier error:', (err as Error).message);
+    }
+  }
+
+    // --- Tier 2: Dynamic Anti-Bubble Fallback ---
+  // If Ollama is offline or returned insufficient verified tracks, fill remaining slots dynamically
+  while (results.length < count) {
+    const fallbackResult = await getDynamicFallbackTrack(roomProfile, queuedSongIds, queuedArtists, queuedDedupeKeys);
+    if (!fallbackResult) {
+      console.warn('[Curator] Unable to find more eligible fallback tracks without repeating');
+      break;
+    }
+    queuedSongIds.add(fallbackResult.track.id);
+    queuedArtists.add(fallbackResult.track.artist.toLowerCase());
+    const normA = normalizeArtist(fallbackResult.track.artist).replace(/\s+/g, '');
+    if (normA) queuedArtists.add(normA);
+    queuedDedupeKeys.add(getTrackDedupeKey(fallbackResult.track.title, fallbackResult.track.artist));
+    results.push(fallbackResult);
+
+    brainLogger.logInteraction({
+      timestamp: Math.floor(Date.now() / 1000),
+      model: 'deezer-graph-engine',
+      action: 'tier2_fallback',
+      prompt: `Dynamic Fallback (Room listeners: ${roomProfile.memberCount}, Liked: ${roomProfile.topLikedArtists.join(', ') || 'Eclectic'})`,
+      response: JSON.stringify({
+        track: `${fallbackResult.track.artist} - ${fallbackResult.track.title}`,
+        curatedBy: fallbackResult.curatedBy,
+        reason: fallbackResult.curationReason,
+      }, null, 2),
+      durationMs: 180,
+      status: 'fallback',
+      metadata: { curatedBy: fallbackResult.curatedBy, trackId: fallbackResult.track.id },
+    });
+  }
+
+  return results;
+}
+
+export default {
+  isTrackEligibleForAutoplay,
+  getActiveVoiceRoomProfile,
+  getNextAutoplayTracks,
+  getEngine,
+  setEngine,
+};

@@ -1,0 +1,16 @@
+[Unit]
+Description=VEXO Discord Music Bot & VLC Stream
+After=network.target ollama.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vexo
+ExecStart=/usr/bin/npx tsx src/index.ts
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

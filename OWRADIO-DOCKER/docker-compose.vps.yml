@@ -1,0 +1,19 @@
+services:
+  musicbot:
+    environment:
+      HTTP_PROXY: http://100.64.0.1:8888
+      HTTPS_PROXY: http://100.64.0.1:8888
+      NO_PROXY: localhost,127.0.0.1,bgutil-provider
+      http_proxy: http://100.64.0.1:8888
+      https_proxy: http://100.64.0.1:8888
+      no_proxy: localhost,127.0.0.1,bgutil-provider
+      YOUTUBE_PROXY: http://100.64.0.1:8888
+    ports: !override
+      - "127.0.0.1:6767:8080"
+    networks:
+      - default
+      - nginx-proxy
+
+networks:
+  nginx-proxy:
+    external: true
