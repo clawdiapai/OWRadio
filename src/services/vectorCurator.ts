@@ -11,6 +11,7 @@ import config from '../config.js';
 import brainLogger from './brainLogger.js';
 import type { CuratedTrackResult, RoomTasteProfile } from './curator.js';
 import { isTrackEligibleForAutoplay } from './curator.js';
+import { detectTrackLanguage } from './languageDetector.js';
 import type { DeezerTrackMetadata } from './deezer.js';
 import featureFlags from './featureFlags.js';
 import stationCurator from './stationCurator.js';
@@ -225,7 +226,8 @@ class VectorCurator {
     activeUserIds: string[],
     count = 2,
     queuedSongIds: Set<string> = new Set(),
-    queuedArtists: Set<string> = new Set()
+    queuedArtists: Set<string> = new Set(),
+    queuedLanguages: Set<string> = new Set()
   ): Promise<CuratedTrackResult[]> {
     if (!this.isLoaded) {
       await this.init();
@@ -420,12 +422,14 @@ class VectorCurator {
 
       const song = cand.song;
 
-      // 48h and 2h anti-repetition SQLite filter applied to top ranked candidates only
-      if (!isTrackEligibleForAutoplay(song.id, song.artist, queuedSongIds, queuedArtists, song.title, undefined, song.durationSec)) {
+      // 48h, 2h, and foreign language anti-repetition filter applied to top ranked candidates
+      if (!isTrackEligibleForAutoplay(song.id, song.artist, queuedSongIds, queuedArtists, song.title, undefined, song.durationSec, queuedLanguages)) {
         continue;
       }
 
       selectedArtists.add(artistNorm);
+      const songLang = detectTrackLanguage(song.title, song.artist);
+      if (songLang !== 'en') queuedLanguages.add(songLang);
       const trackMeta: DeezerTrackMetadata = {
         id: song.id,
         deezerId: song.deezerId || song.id,

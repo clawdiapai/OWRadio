@@ -12,6 +12,7 @@ import config from '../config.js';
 import brainLogger from './brainLogger.js';
 import type { CuratedTrackResult, RoomTasteProfile } from './curator.js';
 import { isTrackEligibleForAutoplay } from './curator.js';
+import { detectTrackLanguage } from './languageDetector.js';
 import type { DeezerTrackMetadata } from './deezer.js';
 
 interface CatalogSong {
@@ -52,7 +53,8 @@ class JevCurator {
     roomProfile: RoomTasteProfile,
     queuedSongIds: Set<string>,
     queuedArtists: Set<string>,
-    poolSize = 8
+    poolSize = 8,
+    queuedLanguages: Set<string> = new Set()
   ): CatalogSong[] {
     const dislikedSet = new Set(roomProfile.dislikedArtists.map((a) => a.toLowerCase().trim()));
 
@@ -85,16 +87,18 @@ class JevCurator {
 
     candidates.push(...randomRows);
 
-    // Apply strict 48h/2h cooldowns, disliked vetoes, and queue deduplication
+    // Apply strict 48h/2h/language cooldowns, disliked vetoes, and queue deduplication
     const filtered: CatalogSong[] = [];
     const seenArtists = new Set<string>();
 
     for (const song of candidates) {
       const artistNorm = song.artist.toLowerCase().trim();
       if (dislikedSet.has(artistNorm) || seenArtists.has(artistNorm)) continue;
-      if (!isTrackEligibleForAutoplay(song.id, song.artist, queuedSongIds, queuedArtists, song.title, undefined, song.durationSec)) continue;
+      if (!isTrackEligibleForAutoplay(song.id, song.artist, queuedSongIds, queuedArtists, song.title, undefined, song.durationSec, queuedLanguages)) continue;
 
       seenArtists.add(artistNorm);
+      const songLang = detectTrackLanguage(song.title, song.artist);
+      if (songLang !== 'en') queuedLanguages.add(songLang);
       filtered.push(song);
       if (filtered.length >= poolSize) break;
     }
@@ -110,13 +114,14 @@ class JevCurator {
     activeUserIds: string[],
     count = 2,
     queuedSongIds: Set<string> = new Set(),
-    queuedArtists: Set<string> = new Set()
+    queuedArtists: Set<string> = new Set(),
+    queuedLanguages: Set<string> = new Set()
   ): Promise<CuratedTrackResult[]> {
     const tStart = performance.now();
     const seedEra = SEED_ERAS[Math.floor(Math.random() * SEED_ERAS.length)];
 
     // 1. Prepare typed candidate slate
-    const candidatePool = this.sampleCandidatePool(roomProfile, queuedSongIds, queuedArtists, 8);
+    const candidatePool = this.sampleCandidatePool(roomProfile, queuedSongIds, queuedArtists, 8, queuedLanguages);
     if (candidatePool.length === 0) {
       console.warn('[JevCurator] Candidate pool empty, skipping decision pass.');
       return [];

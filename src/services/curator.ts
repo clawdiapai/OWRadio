@@ -17,6 +17,7 @@ import featureFlags from './featureFlags.js';
 import dynamicSettings from './dynamicSettings.js';
 import collaborativeGraph from './collaborativeGraph.js';
 import { normalizeArtist, normalizeTrackTitle, getTrackDedupeKey } from '../utils/trackDedupe.js';
+import { detectTrackLanguage, LANGUAGE_METADATA, type TrackLanguage } from './languageDetector.js';
 
 export type CurationEngineType = 'embedding' | 'jev' | 'llm' | 'hybrid';
 
@@ -122,6 +123,65 @@ let cached48hDedupeKeys: Set<string> | null = null;
 let cached48hExpiry = 0;
 let cached2hNormArtists: Set<string> | null = null;
 let cached2hExpiry = 0;
+let cachedLanguageCooldownMap: Map<TrackLanguage, { title: string; artist: string; playedAt: number }> | null = null;
+let cachedLanguageExpiry = 0;
+
+const stmtRecentPlaysLanguage = sqlite.prepare(`
+  SELECT s.title, ph.artist_name, ph.played_at
+  FROM playback_history ph
+  JOIN songs s ON ph.song_id = s.id
+  WHERE ph.played_at > ?
+  ORDER BY ph.played_at DESC
+  LIMIT 60
+`);
+
+export interface ActiveLanguageCooldown {
+  language: TrackLanguage;
+  languageName: string;
+  flag: string;
+  lastTitle: string;
+  lastArtist: string;
+  lastPlayedAt: number;
+  remainingSec: number;
+}
+
+/**
+ * Returns currently active foreign language cooldown locks.
+ */
+export function getActiveLanguageCooldowns(cooldownMinutes?: number): ActiveLanguageCooldown[] {
+  const mins = cooldownMinutes ?? dynamicSettings.getNumber('curation_language_cooldown_minutes', 120);
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - mins * 60;
+
+  const recent = stmtRecentPlaysLanguage.all(cutoff) as Array<{
+    title: string;
+    artist_name: string;
+    played_at: number;
+  }>;
+
+  const result: ActiveLanguageCooldown[] = [];
+  const seenLangs = new Set<TrackLanguage>();
+
+  for (const row of recent) {
+    const lang = detectTrackLanguage(row.title, row.artist_name);
+    if (lang !== 'en' && !seenLangs.has(lang)) {
+      seenLangs.add(lang);
+      const meta = LANGUAGE_METADATA[lang] || { name: lang.toUpperCase(), flag: '🌍' };
+      const remainingSec = Math.max(0, (row.played_at + mins * 60) - now);
+      result.push({
+        language: lang,
+        languageName: meta.name,
+        flag: meta.flag,
+        lastTitle: row.title,
+        lastArtist: row.artist_name,
+        lastPlayedAt: row.played_at,
+        remainingSec,
+      });
+    }
+  }
+
+  return result;
+}
 
 /**
  * Checks whether a track is eligible for autoplay under the 48h song and 2h artist rules.
@@ -208,7 +268,8 @@ export function isTrackEligibleForAutoplay(
   queuedArtists: Set<string> = new Set(),
   title?: string,
   queuedDedupeKeys: Set<string> = new Set(),
-  durationSec?: number
+  durationSec?: number,
+  queuedLanguages: Set<string> = new Set()
 ): boolean {
   // 0. Autoplay Duration Limits (Hard bounds: 60s to 480s / 8 minutes maximum)
   const maxDurationSec = dynamicSettings.getNumber('curation_max_autoplay_duration_sec', 480);
@@ -287,6 +348,38 @@ export function isTrackEligibleForAutoplay(
       cached2hExpiry = now + 5;
     }
     if (cached2hNormArtists.has(normArtist)) return false;
+  }
+
+  // 4. Foreign Language Cooldown (Dynamic setting, default: 120m)
+  // Ensures foreign language tracks (French, Spanish, German, etc.) do not repeat within cooldown window
+  const langCooldownMinutes = dynamicSettings.getNumber('curation_language_cooldown_minutes', 120);
+  if (langCooldownMinutes > 0) {
+    const trackLang = detectTrackLanguage(title || '', artistName);
+    if (trackLang !== 'en') {
+      // 4A. In-memory queue check: no two songs in the same foreign language can be active or queued
+      if (queuedLanguages && queuedLanguages.has(trackLang)) {
+        return false;
+      }
+
+      // 4B. Playback history cooldown check
+      const cutoffLang = now - langCooldownMinutes * 60;
+      if (!cachedLanguageCooldownMap || now > cachedLanguageExpiry) {
+        const recentPlays = stmtRecentPlaysLanguage.all(cutoffLang) as Array<{ title: string; artist_name: string; played_at: number }>;
+        const freshMap = new Map<TrackLanguage, { title: string; artist: string; playedAt: number }>();
+        for (const row of recentPlays) {
+          const l = detectTrackLanguage(row.title, row.artist_name);
+          if (l !== 'en' && !freshMap.has(l)) {
+            freshMap.set(l, { title: row.title, artist: row.artist_name, playedAt: row.played_at });
+          }
+        }
+        cachedLanguageCooldownMap = freshMap;
+        cachedLanguageExpiry = now + 5; // Cache for 5s to eliminate SQL loop thrashing
+      }
+
+      if (cachedLanguageCooldownMap.has(trackLang)) {
+        return false;
+      }
+    }
   }
 
   return true;
@@ -387,7 +480,8 @@ async function getDynamicFallbackTrack(
   roomProfile: RoomTasteProfile,
   queuedSongIds: Set<string>,
   queuedArtists: Set<string>,
-  queuedDedupeKeys: Set<string> = new Set()
+  queuedDedupeKeys: Set<string> = new Set(),
+  queuedLanguages: Set<string> = new Set()
 ): Promise<CuratedTrackResult | null> {
   const hasSeeds = roomProfile.topLikedArtists.length > 0;
   const rand = Math.random();
@@ -401,7 +495,7 @@ async function getDynamicFallbackTrack(
       if (artistId) {
         const topTracks = await deezer.getArtistTopTracks(artistId, 15);
         for (const track of topTracks) {
-          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
             return {
               track,
               curatedBy: 'Dynamic Taste Deep-Cut',
@@ -425,7 +519,7 @@ async function getDynamicFallbackTrack(
         const deepCuts = await collaborativeGraph.getDeepCutsForArtists(relatedNames, 5, 3);
         const shuffled = fisherYatesShuffle(deepCuts);
         for (const track of shuffled) {
-          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+          if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
             return {
               track,
               curatedBy: 'Dynamic Taste Deep-Cut',
@@ -470,7 +564,7 @@ async function getDynamicFallbackTrack(
 
     const shuffled = fisherYatesShuffle(candidates);
     for (const track of shuffled) {
-      if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+      if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
         return {
           track,
           curatedBy,
@@ -488,7 +582,7 @@ async function getDynamicFallbackTrack(
   const charts = await deezer.getRandomChartTracks(selectedGenre, 50);
   const shuffledCharts = fisherYatesShuffle(charts);
   for (const track of shuffledCharts) {
-    if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+    if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
       return {
         track,
         curatedBy: 'Dynamic Era Roulette',
@@ -529,6 +623,16 @@ export async function getNextAutoplayTracks(
     if (t) queuedDedupeKeys.add(getTrackDedupeKey(t, a));
   }
 
+  const queuedLanguages = new Set<string>();
+  for (let i = 0; i < existingQueueTitles.length; i++) {
+    const t = existingQueueTitles[i];
+    const a = existingQueueArtists[i] || '';
+    if (t && a) {
+      const l = detectTrackLanguage(t, a);
+      if (l !== 'en') queuedLanguages.add(l);
+    }
+  }
+
   const results: CuratedTrackResult[] = [];
 
   // --- Tier 0: Grounded Time Capsule (Strict Record Release Dates, Zero LLM Hallucination) ---
@@ -544,12 +648,14 @@ export async function getNextAutoplayTracks(
         queuedArtists
       );
       for (const track of tcTracks) {
-        if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {
+        if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec, queuedLanguages)) {
           queuedSongIds.add(track.id);
           queuedArtists.add(track.artist.toLowerCase());
           const normA = normalizeArtist(track.artist).replace(/\s+/g, '');
           if (normA) queuedArtists.add(normA);
           queuedDedupeKeys.add(getTrackDedupeKey(track.title, track.artist));
+          const lang = detectTrackLanguage(track.title, track.artist);
+          if (lang !== 'en') queuedLanguages.add(lang);
           results.push({
             track,
             curatedBy: 'Dynamic Era Roulette',
@@ -568,13 +674,15 @@ export async function getNextAutoplayTracks(
   if (currentEngine === 'hybrid') {
     // Primary Hybrid Mode: 20/50/30 Degrees of Separation Collaborative Graph (Last.fm + Deezer)
     while (results.length < count) {
-      const collTrack = await getDynamicFallbackTrack(roomProfile, queuedSongIds, queuedArtists, queuedDedupeKeys);
+      const collTrack = await getDynamicFallbackTrack(roomProfile, queuedSongIds, queuedArtists, queuedDedupeKeys, queuedLanguages);
       if (!collTrack) break;
       queuedSongIds.add(collTrack.track.id);
       queuedArtists.add(collTrack.track.artist.toLowerCase());
       const normA = normalizeArtist(collTrack.track.artist).replace(/\s+/g, '');
       if (normA) queuedArtists.add(normA);
       queuedDedupeKeys.add(getTrackDedupeKey(collTrack.track.title, collTrack.track.artist));
+      const lang = detectTrackLanguage(collTrack.track.title, collTrack.track.artist);
+      if (lang !== 'en') queuedLanguages.add(lang);
       results.push(collTrack);
     }
   } else if (currentEngine === 'embedding') {
@@ -585,9 +693,14 @@ export async function getNextAutoplayTracks(
           memberUserIds,
           count,
           queuedSongIds,
-          queuedArtists
+          queuedArtists,
+          queuedLanguages
         );
-        for (const vt of vectorTracks) results.push(vt);
+        for (const vt of vectorTracks) {
+          results.push(vt);
+          const lang = detectTrackLanguage(vt.track.title, vt.track.artist);
+          if (lang !== 'en') queuedLanguages.add(lang);
+        }
       } catch (err) {
         console.warn('[Curator] Latent vector curation tier error:', (err as Error).message);
       }
@@ -599,9 +712,14 @@ export async function getNextAutoplayTracks(
         memberUserIds,
         count,
         queuedSongIds,
-        queuedArtists
+        queuedArtists,
+        queuedLanguages
       );
-      for (const jt of jevTracks) results.push(jt);
+      for (const jt of jevTracks) {
+        results.push(jt);
+        const lang = detectTrackLanguage(jt.track.title, jt.track.artist);
+        if (lang !== 'en') queuedLanguages.add(lang);
+      }
     } catch (err) {
       console.warn('[Curator] Jev discriminative decision tier error:', (err as Error).message);
     }
@@ -623,12 +741,14 @@ export async function getNextAutoplayTracks(
         if (results.length >= count) break;
         const candidates = await deezer.searchTracks(`${rec.artist} ${rec.title}`, 3);
         for (const candidate of candidates) {
-          if (isTrackEligibleForAutoplay(candidate.id, candidate.artist, queuedSongIds, queuedArtists, candidate.title, queuedDedupeKeys, candidate.durationSec)) {
+          if (isTrackEligibleForAutoplay(candidate.id, candidate.artist, queuedSongIds, queuedArtists, candidate.title, queuedDedupeKeys, candidate.durationSec, queuedLanguages)) {
             queuedSongIds.add(candidate.id);
             queuedArtists.add(candidate.artist.toLowerCase());
             const normA = normalizeArtist(candidate.artist).replace(/\s+/g, '');
             if (normA) queuedArtists.add(normA);
             queuedDedupeKeys.add(getTrackDedupeKey(candidate.title, candidate.artist));
+            const lang = detectTrackLanguage(candidate.title, candidate.artist);
+            if (lang !== 'en') queuedLanguages.add(lang);
             results.push({
               track: candidate,
               curatedBy: rec.type === 'wildcard' ? 'AI Wildcard' : 'AI Room Mix',
@@ -646,7 +766,7 @@ export async function getNextAutoplayTracks(
     // --- Tier 2: Dynamic Anti-Bubble Fallback ---
   // If Ollama is offline or returned insufficient verified tracks, fill remaining slots dynamically
   while (results.length < count) {
-    const fallbackResult = await getDynamicFallbackTrack(roomProfile, queuedSongIds, queuedArtists, queuedDedupeKeys);
+    const fallbackResult = await getDynamicFallbackTrack(roomProfile, queuedSongIds, queuedArtists, queuedDedupeKeys, queuedLanguages);
     if (!fallbackResult) {
       console.warn('[Curator] Unable to find more eligible fallback tracks without repeating');
       break;
@@ -656,6 +776,8 @@ export async function getNextAutoplayTracks(
     const normA = normalizeArtist(fallbackResult.track.artist).replace(/\s+/g, '');
     if (normA) queuedArtists.add(normA);
     queuedDedupeKeys.add(getTrackDedupeKey(fallbackResult.track.title, fallbackResult.track.artist));
+    const lang = detectTrackLanguage(fallbackResult.track.title, fallbackResult.track.artist);
+    if (lang !== 'en') queuedLanguages.add(lang);
     results.push(fallbackResult);
 
     brainLogger.logInteraction({
@@ -681,6 +803,7 @@ export default {
   isTrackEligibleForAutoplay,
   getActiveVoiceRoomProfile,
   getNextAutoplayTracks,
+  getActiveLanguageCooldowns,
   getEngine,
   setEngine,
 };

@@ -2262,7 +2262,7 @@
 
       <!-- Brain Section 3: Anti-Repetition & Cooldowns -->
       <div id="brain-section-cooldown" style="display: none;">
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
           <!-- Left: 48-Hour Song Cooldowns -->
           <div class="card" style="padding: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -2277,7 +2277,7 @@
             </div>
           </div>
 
-          <!-- Right: 2-Hour Artist Cooldowns -->
+          <!-- Middle: 2-Hour Artist Cooldowns -->
           <div class="card" style="padding: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
               <span style="font-size: 15px; font-weight: 700; color: #fff;">🎤 2-Hour Artist Cooldowns</span>
@@ -2288,6 +2288,20 @@
             </p>
             <div id="brain-cooldown-artists-list" style="max-height: 480px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
               <div style="text-align: center; padding: 20px; color: var(--text-muted);">No artists currently locked</div>
+            </div>
+          </div>
+
+          <!-- Right: Foreign Language Cooldowns -->
+          <div class="card" style="padding: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <span style="font-size: 15px; font-weight: 700; color: #fff;">🌍 Foreign Language Cooldowns</span>
+              <span id="badge-language-cooldown-count" class="badge-tag">0 LOCKED</span>
+            </div>
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+              Songs in the same foreign language (e.g. French, Spanish, German) cannot repeat for 120 minutes:
+            </p>
+            <div id="brain-cooldown-languages-list" style="max-height: 480px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+              <div style="text-align: center; padding: 20px; color: var(--text-muted);">No foreign languages currently locked</div>
             </div>
           </div>
         </div>

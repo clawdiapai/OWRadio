@@ -894,7 +894,7 @@ async function fetchBrainData() {
     if (bInteractions) bInteractions.innerText = String(data.recentInteractions?.length || 0);
     if (bPref) bPref.innerText = String(data.preferences?.length || 0);
     if (bCooldown) {
-      bCooldown.innerText = String((data.songCooldowns?.length || 0) + (data.artistCooldowns?.length || 0));
+      bCooldown.innerText = String((data.songCooldowns?.length || 0) + (data.artistCooldowns?.length || 0) + (data.languageCooldowns?.length || 0));
     }
 
     // Render Subsections
@@ -1130,6 +1130,28 @@ function renderCooldowns() {
           </div>
         `;
       }).join('');
+    }
+  }
+
+  // 3. Foreign Language cooldowns
+  const languages = currentBrainData.languageCooldowns || [];
+  const langBadge = document.getElementById('badge-language-cooldown-count');
+  const langContainer = document.getElementById('brain-cooldown-languages-list');
+  const langMinutes = currentBrainData.cooldownConfig?.languageCooldownMinutes || 120;
+  if (langBadge) langBadge.innerText = `${languages.length} LOCKED`;
+  if (langContainer) {
+    if (languages.length === 0) {
+      langContainer.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--text-muted);">No foreign languages currently on cooldown</div>`;
+    } else {
+      langContainer.innerHTML = languages.map((l) => `
+        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-weight: 700; color: #fff; font-size: 13px;">${l.flag || '🌍'} ${escapeHtml(l.languageName || l.language.toUpperCase())}</div>
+            <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(l.lastArtist)} - ${escapeHtml(l.lastTitle)} • ${formatTimeAgo(l.lastPlayedAt)}</div>
+          </div>
+          <span class="code-pill" style="color: #60a5fa; font-size: 11px;">🔒 ${formatCountdown(l.remainingSec)}</span>
+        </div>
+      `).join('');
     }
   }
 }

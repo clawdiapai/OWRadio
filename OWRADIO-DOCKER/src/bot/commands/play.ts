@@ -23,6 +23,7 @@ import ollama from '../../services/ollama.js';
 import curator from '../../services/curator.js';
 import vectorCurator from '../../services/vectorCurator.js';
 import featureFlags from '../../services/featureFlags.js';
+import { detectTrackLanguage } from '../../services/languageDetector.js';
 import dynamicSettings from '../../services/dynamicSettings.js';
 import { normalizeArtist, getTrackDedupeKey } from '../../utils/trackDedupe.js';
 
@@ -356,6 +357,7 @@ export async function handleVibe(
   const queuedSongIds = new Set<string>();
   const queuedArtists = new Set<string>();
   const queuedDedupeKeys = new Set<string>();
+  const queuedLanguages = new Set<string>();
 
   if (player.currentTrack) {
     queuedSongIds.add(player.currentTrack.id);
@@ -363,6 +365,8 @@ export async function handleVibe(
     const normCurArt = normalizeArtist(player.currentTrack.artist).replace(/\s+/g, '');
     if (normCurArt) queuedArtists.add(normCurArt);
     queuedDedupeKeys.add(getTrackDedupeKey(player.currentTrack.title, player.currentTrack.artist));
+    const lang = detectTrackLanguage(player.currentTrack.title, player.currentTrack.artist);
+    if (lang !== 'en') queuedLanguages.add(lang);
   }
 
   for (const q of player.getQueueList()) {
@@ -371,6 +375,8 @@ export async function handleVibe(
     const normQArt = normalizeArtist(q.artist).replace(/\s+/g, '');
     if (normQArt) queuedArtists.add(normQArt);
     queuedDedupeKeys.add(getTrackDedupeKey(q.title, q.artist));
+    const lang = detectTrackLanguage(q.title, q.artist);
+    if (lang !== 'en') queuedLanguages.add(lang);
   }
 
   let queuedCount = 0;
@@ -394,7 +400,9 @@ export async function handleVibe(
           queuedSongIds,
           queuedArtists,
           ytCandidate.title,
-          queuedDedupeKeys
+          queuedDedupeKeys,
+          undefined,
+          queuedLanguages
         )
       ) {
         const track = AudioTrack.fromYouTube(
@@ -413,6 +421,8 @@ export async function handleVibe(
         if (candNormArt) queuedArtists.add(candNormArt);
         if (itemNormArtist) queuedArtists.add(itemNormArtist);
         queuedDedupeKeys.add(candKey);
+        const candLang = detectTrackLanguage(ytCandidate.title, ytCandidate.artist);
+        if (candLang !== 'en') queuedLanguages.add(candLang);
         queuedCount++;
         continue;
       }
@@ -433,7 +443,9 @@ export async function handleVibe(
           queuedSongIds,
           queuedArtists,
           meta.title,
-          queuedDedupeKeys
+          queuedDedupeKeys,
+          meta.durationSec,
+          queuedLanguages
         )
       ) {
         const track = AudioTrack.fromDeezer(
@@ -452,6 +464,8 @@ export async function handleVibe(
         if (metaNormArt) queuedArtists.add(metaNormArt);
         if (itemNormArtist) queuedArtists.add(itemNormArtist);
         queuedDedupeKeys.add(metaKey);
+        const metaLang = detectTrackLanguage(meta.title, meta.artist);
+        if (metaLang !== 'en') queuedLanguages.add(metaLang);
         queuedCount++;
       }
     }

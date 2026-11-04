@@ -28,6 +28,7 @@ import brainLogger from '../services/brainLogger.js';
 import tasteRadar from '../services/tasteRadar.js';
 import playlistParser from '../services/playlistParser.js';
 import featureFlags from '../services/featureFlags.js';
+import { detectTrackLanguage } from '../services/languageDetector.js';
 import stationCurator from '../services/stationCurator.js';
 import vault from '../services/vault.js';
 import harmonicMixing from '../services/harmonicMixing.js';
@@ -249,6 +250,7 @@ export function createWebServer(player: GuildPlayer) {
       const queuedSongIds = new Set<string>();
       const queuedArtists = new Set<string>();
       const queuedDedupeKeys = new Set<string>();
+      const queuedLanguages = new Set<string>();
 
       if (player.currentTrack) {
         queuedSongIds.add(player.currentTrack.id);
@@ -256,6 +258,8 @@ export function createWebServer(player: GuildPlayer) {
         const normCur = normalizeArtist(player.currentTrack.artist).replace(/\s+/g, '');
         if (normCur) queuedArtists.add(normCur);
         queuedDedupeKeys.add(getTrackDedupeKey(player.currentTrack.title, player.currentTrack.artist));
+        const lang = detectTrackLanguage(player.currentTrack.title, player.currentTrack.artist);
+        if (lang !== 'en') queuedLanguages.add(lang);
       }
 
       for (const q of player.getQueueList()) {
@@ -264,6 +268,8 @@ export function createWebServer(player: GuildPlayer) {
         const normQ = normalizeArtist(q.artist).replace(/\s+/g, '');
         if (normQ) queuedArtists.add(normQ);
         queuedDedupeKeys.add(getTrackDedupeKey(q.title, q.artist));
+        const lang = detectTrackLanguage(q.title, q.artist);
+        if (lang !== 'en') queuedLanguages.add(lang);
       }
 
       let count = 0;
@@ -290,7 +296,9 @@ export function createWebServer(player: GuildPlayer) {
               queuedSongIds,
               queuedArtists,
               ytCandidate.title,
-              queuedDedupeKeys
+              queuedDedupeKeys,
+              undefined,
+              queuedLanguages
             )
           ) {
             const track = AudioTrack.fromYouTube(ytCandidate, 'web_dashboard', true, 'AI Vibe Mix', item.reason);
@@ -300,6 +308,8 @@ export function createWebServer(player: GuildPlayer) {
             if (candNorm) queuedArtists.add(candNorm);
             if (itemNormArtist) queuedArtists.add(itemNormArtist);
             queuedDedupeKeys.add(candKey);
+            const candLang = detectTrackLanguage(ytCandidate.title, ytCandidate.artist);
+            if (candLang !== 'en') queuedLanguages.add(candLang);
             count++;
             continue;
           }
@@ -320,7 +330,9 @@ export function createWebServer(player: GuildPlayer) {
               queuedSongIds,
               queuedArtists,
               meta.title,
-              queuedDedupeKeys
+              queuedDedupeKeys,
+              meta.durationSec,
+              queuedLanguages
             )
           ) {
             const track = AudioTrack.fromDeezer(meta, 'web_dashboard', true, 'AI Vibe Mix', item.reason);
@@ -330,6 +342,8 @@ export function createWebServer(player: GuildPlayer) {
             if (metaNorm) queuedArtists.add(metaNorm);
             if (itemNormArtist) queuedArtists.add(itemNormArtist);
             queuedDedupeKeys.add(metaKey);
+            const metaLang = detectTrackLanguage(meta.title, meta.artist);
+            if (metaLang !== 'en') queuedLanguages.add(metaLang);
             count++;
           }
         }
@@ -614,6 +628,9 @@ export function createWebServer(player: GuildPlayer) {
       LIMIT 30
     `).all(cutoff2h);
 
+    // Active foreign language cooldowns
+    const languageCooldowns = curator.getActiveLanguageCooldowns();
+
     return c.json({
       model: config.OLLAMA_MODEL,
       ollamaUrl: config.OLLAMA_URL,
@@ -628,9 +645,11 @@ export function createWebServer(player: GuildPlayer) {
       activeListeners,
       songCooldowns,
       artistCooldowns,
+      languageCooldowns,
       cooldownConfig: {
         songCooldownHours: config.AUTOPLAY_COOLDOWN_HOURS,
         artistCooldownHours: config.ARTIST_COOLDOWN_HOURS,
+        languageCooldownMinutes: dynamicSettings.getNumber('curation_language_cooldown_minutes', 120),
       },
       autoResume: {
         enabled: config.AUTO_RESUME,
