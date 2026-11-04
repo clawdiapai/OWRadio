@@ -278,12 +278,13 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     description: 'Number of upcoming tracks actively decoded and pre-buffered in RAM for 0ms transitions.',
     type: 'number',
     control: 'select',
-    defaultValue: 3,
+    defaultValue: 15,
     options: [
-      { label: '1 Deck (Minimal RAM)', value: 1 },
-      { label: '2 Decks', value: 2 },
-      { label: '3 Decks (Recommended)', value: 3 },
-      { label: '4 Decks (Aggressive)', value: 4 },
+      { label: '3 Decks', value: 3 },
+      { label: '5 Decks', value: 5 },
+      { label: '10 Decks (Extended)', value: 10 },
+      { label: '15 Decks (Full Queue Pre-Buffer)', value: 15 },
+      { label: '20 Decks (Maximum Horizon)', value: 20 },
     ],
   },
   {

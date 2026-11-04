@@ -144,6 +144,7 @@ interface CrossfadeState {
   status: 'buffering' | 'fading';
   fadeFramesElapsed: number;
   totalFadeFrames: number;
+  isUserSkip?: boolean;
 }
 
 export class BroadcastTee extends EventEmitter {
@@ -158,7 +159,7 @@ export class BroadcastTee extends EventEmitter {
 
   /** Standby preload pool (Decks B, C, D) pre-buffered and primed in RAM keyed by streamUrl */
   private standbyPool: Map<string, DecodeChannel> = new Map();
-  public static readonly MAX_STANDBY_DECKS = 5;
+  public static readonly MAX_STANDBY_DECKS = 20;
   private standbyPrimeQueue: string[] = [];
   private isPrimingNextDeck = false;
 
@@ -476,6 +477,7 @@ export class BroadcastTee extends EventEmitter {
         '--no-warnings',
         '--no-check-certificates',
         '--js-runtimes', 'node',
+        '--cache-dir', path.resolve(process.cwd(), 'data', '.cache', 'yt-dlp'),
       ];
 
       if (config.ENABLE_SPONSORBLOCK) {
@@ -766,7 +768,7 @@ export class BroadcastTee extends EventEmitter {
    * Evicts any standby channels that are no longer in the upcoming list.
    */
   public prepareStandbyDecks(streamUrls: string[]): void {
-    const maxDecks = dynamicSettings.getNumber('audio_standby_decks_count', BroadcastTee.MAX_STANDBY_DECKS);
+    const maxDecks = Math.max(15, dynamicSettings.getNumber('audio_standby_decks_count', BroadcastTee.MAX_STANDBY_DECKS));
     const targetUrls = streamUrls.slice(0, maxDecks);
     const targetSet = new Set(targetUrls);
 
@@ -889,7 +891,7 @@ export class BroadcastTee extends EventEmitter {
    * If a matching Standby Deck (B, C, or D) is primed in RAM, crossfade begins IMMEDIATELY (0.0s delay)!
    * If not primed, buffers in background while current track plays at full volume.
    */
-  public transitionTo(streamUrl: string, customFadeFrames?: number): boolean {
+  public transitionTo(streamUrl: string, customFadeFrames?: number, isUserSkip = false): boolean {
     const fadeFrames = customFadeFrames && customFadeFrames >= 20 ? customFadeFrames : CROSSFADE_FRAMES;
 
     if (!this.isPlaying || !this.activeChannel) {
@@ -978,6 +980,7 @@ export class BroadcastTee extends EventEmitter {
       status: 'buffering',
       fadeFramesElapsed: 0,
       totalFadeFrames: fadeFrames,
+      isUserSkip: isUserSkip || false,
     };
     this.incomingChannel = this.spawnDecodeChannel(streamUrl, 'incoming');
     return true;
@@ -1172,7 +1175,8 @@ export class BroadcastTee extends EventEmitter {
             return;
           }
 
-          if (this.incomingChannel.queueBytes >= PCM_FRAME_SIZE * MIN_HANDOVER_FRAMES) {
+          const minRequired = this.crossfadeState.isUserSkip ? 5 : MIN_HANDOVER_FRAMES;
+          if (this.incomingChannel.queueBytes >= PCM_FRAME_SIZE * minRequired) {
             console.log(`[BroadcastTee] Incoming stream ready with ${this.incomingChannel.queueBytes} bytes buffered. Starting equal-power crossfade!`);
             this.crossfadeState.status = 'fading';
             this.crossfadeState.fadeFramesElapsed = 0;
@@ -1187,6 +1191,15 @@ export class BroadcastTee extends EventEmitter {
         while (this.framesDelivered < targetFrames) {
           if (this.crossfadeState.status === 'buffering') {
             let frame = this.activeChannel ? this.popFrameFromChannel(this.activeChannel) : null;
+            if (this.crossfadeState.isUserSkip) {
+              const quickFade = 25; // 500ms responsive fadeout
+              const step = Math.min(quickFade, this.crossfadeState.fadeFramesElapsed);
+              const gain = Math.max(0, 1 - (step / quickFade));
+              if (frame && gain < 1) {
+                frame = applyGainToFrame(frame, gain);
+              }
+              this.crossfadeState.fadeFramesElapsed++;
+            }
             if (!frame) frame = this.silenceFrame;
             this.framesDelivered++;
             this.writePcmToBranches(frame);

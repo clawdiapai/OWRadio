@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { sqlite } from '../db/index.js';
+import config from '../config.js';
 import featureFlags from './featureFlags.js';
 
 const VAULT_DIR = path.resolve(process.cwd(), 'data', 'vault');
@@ -78,19 +79,25 @@ class AudioVaultService {
   /**
    * Record playback and auto-trigger vault pre-caching for frequent tracks (played >= 2 times).
    */
-  public async maybePrecache(songId: string, youtubeUrlOrId?: string): Promise<void> {
+  public async maybePrecache(songId: string, youtubeUrlOrId?: string, force = false): Promise<void> {
     if (!featureFlags.isEnabled('feature_offline_vault')) return;
     if (this.hasTrack(songId) || this.inFlightDownloads.has(songId)) return;
 
     try {
+      if (force && youtubeUrlOrId) {
+        console.log(`[AudioVault] ⚡ Pre-caching upcoming queue track "${songId}" to Server Vault...`);
+        this.cacheFromYouTube(songId, youtubeUrlOrId);
+        return;
+      }
+
       // Check play count in playback_history
       const row = sqlite.prepare(`
         SELECT COUNT(*) as playCount FROM playback_history WHERE song_id = ?
       `).get(songId) as { playCount: number } | undefined;
 
       const playCount = row?.playCount || 0;
-      if (playCount >= 2 && youtubeUrlOrId) {
-        console.log(`[AudioVault] 💾 Track "${songId}" played ${playCount} times. Pre-caching to Server Vault...`);
+      if (playCount >= 1 && youtubeUrlOrId) {
+        console.log(`[AudioVault] 💾 Track "${songId}" in history. Pre-caching to Server Vault...`);
         this.cacheFromYouTube(songId, youtubeUrlOrId);
       }
     } catch (err) {
@@ -113,17 +120,29 @@ class AudioVaultService {
       ? youtubeUrlOrId
       : `https://www.youtube.com/watch?v=${youtubeUrlOrId}`;
 
+    const cookiesPath = config.YOUTUBE_COOKIES_PATH || (fs.existsSync(path.resolve(process.cwd(), 'cookies.txt')) ? path.resolve(process.cwd(), 'cookies.txt') : undefined);
+    const ytdlpArgs = [
+      '-o', tempPath,
+      '-f', 'bestaudio[acodec=opus]/bestaudio/18/best',
+      '--no-playlist',
+      '--no-warnings',
+      '--no-check-certificates',
+      '--js-runtimes', 'node',
+      '--cache-dir', path.resolve(process.cwd(), 'data', '.cache', 'yt-dlp'),
+      '--extract-audio',
+      '--audio-format', 'mp3',
+      '--audio-quality', '0',
+    ];
+    if (config.YOUTUBE_PROXY) {
+      ytdlpArgs.push('--proxy', config.YOUTUBE_PROXY);
+    }
+    if (cookiesPath) {
+      ytdlpArgs.push('--cookies', cookiesPath);
+    }
+    ytdlpArgs.push(videoUrl);
+
     return new Promise((resolve) => {
-      const ytdlp = spawn('yt-dlp', [
-        '-o', tempPath,
-        '-f', 'bestaudio[acodec=opus]/bestaudio/18/best',
-        '--no-playlist',
-        '--no-warnings',
-        '--extract-audio',
-        '--audio-format', 'mp3',
-        '--audio-quality', '0',
-        videoUrl,
-      ]);
+      const ytdlp = spawn('yt-dlp', ytdlpArgs);
 
       const timer = setTimeout(() => {
         ytdlp.kill();

@@ -28,6 +28,7 @@ import curator from '../services/curator.js';
 import featureFlags from '../services/featureFlags.js';
 import harmonicMixing from '../services/harmonicMixing.js';
 import stationCurator from '../services/stationCurator.js';
+import vault from '../services/vault.js';
 import vetoService from '../services/vetoService.js';
 import dynamicSettings from '../services/dynamicSettings.js';
 import tasteRadarChart from '../services/tasteRadarChart.js';
@@ -78,8 +79,8 @@ export class GuildPlayer extends EventEmitter {
     this.isPreResolvingQueue = true;
 
     try {
-      const targets = this.queue.slice(0, 10);
-      for (const track of targets) {
+      // Pre-resolve ALL upcoming tracks in queue without limits
+      for (const track of this.queue) {
         if (!track.streamUrl) {
           try {
             const resolved = await streamResolver.resolveStream(track);
@@ -92,7 +93,12 @@ export class GuildPlayer extends EventEmitter {
           } catch (err) {
             console.warn(`[GuildPlayer] Background queue stream resolution error for "${track.title}":`, (err as Error).message);
           }
-          await new Promise((r) => setTimeout(r, 150));
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
+        // Auto-vault upcoming queue tracks in background for instant 0ms local SSD playback
+        if (track.streamUrl && track.streamUrl.startsWith('http') && !vault.hasTrack(track.id)) {
+          vault.maybePrecache(track.id, track.streamUrl, true).catch(() => {});
         }
       }
     } finally {
@@ -931,7 +937,7 @@ export class GuildPlayer extends EventEmitter {
       }
 
       console.log(`[GuildPlayer] Initiating dynamic handover to "${nextTrack.title}" (${nextTrack.streamUrl})`);
-      this.broadcastTee.transitionTo(nextTrack.streamUrl, customFadeFrames);
+      this.broadcastTee.transitionTo(nextTrack.streamUrl, customFadeFrames, isUserSkip);
 
       // Ensure Discord voice connection has audio playing
       if (this.voiceConnection && this.audioPlayer.state.status !== AudioPlayerStatus.Playing) {
@@ -1454,7 +1460,7 @@ export class GuildPlayer extends EventEmitter {
   /**
    * Jumps directly to a song in the queue by index or ID, removing previous songs and initiating playback.
    */
-  public jumpToQueueIndex(indexOrId: number | string): boolean {
+  public async jumpToQueueIndex(indexOrId: number | string): Promise<boolean> {
     let targetIdx = -1;
     if (typeof indexOrId === 'number') {
       targetIdx = indexOrId;
@@ -1468,6 +1474,15 @@ export class GuildPlayer extends EventEmitter {
 
     const targetTrack = this.queue[targetIdx];
     console.log(`[GuildPlayer] ⏩ Jumping directly to #${targetIdx + 1} "${targetTrack.title}" by ${targetTrack.artist}`);
+
+    // If local vault has the track, immediately assign local SSD stream path!
+    if (vault.hasTrack(targetTrack.id)) {
+      const vPath = vault.getTrackPath(targetTrack.id);
+      if (vPath) targetTrack.streamUrl = vPath;
+    } else if (!targetTrack.streamUrl) {
+      const res = await streamResolver.resolveStream(targetTrack);
+      if (res) targetTrack.streamUrl = res.streamUrl;
+    }
 
     // Move target track to front of queue and drop preceding skipped ones
     this.queue.splice(0, targetIdx);

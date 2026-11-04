@@ -460,7 +460,7 @@ export function createWebServer(player: GuildPlayer) {
     if (target === undefined) {
       return c.json({ error: 'Missing "index" or "id" to skip to' }, 400);
     }
-    const success = player.jumpToQueueIndex(target);
+    const success = await player.jumpToQueueIndex(target);
     return c.json({ success, state: player.getStatePayload() });
   });
 
