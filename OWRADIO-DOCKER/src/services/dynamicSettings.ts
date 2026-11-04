@@ -150,7 +150,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     description: 'Control how concert and live performance audio is curated.',
     type: 'string',
     control: 'radio',
-    defaultValue: 'high_quality',
+    defaultValue: 'none',
     options: [
       { label: '🚫 No Lives', value: 'none', description: 'Strictly studio recordings only. Rejects any live versions.' },
       { label: '⭐ High Quality Live', value: 'high_quality', description: 'Allows official live albums & broadcasts (MTV Unplugged, BBC Live Lounge); rejects bootlegs/audience audio.' },

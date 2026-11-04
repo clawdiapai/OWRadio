@@ -60,8 +60,9 @@ export class PlayerUiService {
     this.client = client;
     this.player = player;
 
-    // Restore last bound UI channel from persistent storage
+    // Restore last bound UI channel and active message from persistent storage
     this.boundChannelId = getBotState('last_ui_channel_id', '') || null;
+    this.currentMessageId = getBotState('last_ui_message_id', '') || null;
 
     // Listen to player state changes (song start, finish, skip, pause, resume)
     this.player.on('stateChange', () => {
@@ -367,12 +368,20 @@ export class PlayerUiService {
     try {
       if (!this.client?.user) return;
       const botUserId = this.client.user.id;
-      const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+      const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
       if (!messages) return;
 
-      const toDelete = messages.filter(
-        (m) => m.author.id === botUserId && m.id !== keepMsgId
-      );
+      const toDelete = messages.filter((m) => {
+        if (m.id === keepMsgId) return false;
+        if (m.author.id === botUserId) return true;
+        if (m.author.bot && m.embeds && m.embeds.some((e) => {
+          const banner = `${e.title || ''} ${e.author?.name || ''}`.toUpperCase();
+          return banner.includes('NOW PLAYING') || banner.includes('NOW BROADCASTING') || banner.includes('HI-FI STREAM');
+        })) {
+          return true;
+        }
+        return false;
+      });
 
       for (const [_id, msg] of toDelete) {
         try {
