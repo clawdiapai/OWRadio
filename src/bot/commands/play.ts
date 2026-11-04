@@ -1,7 +1,7 @@
 /**
  * @file play.ts
- * @description Slash command handlers for /play (song/playlist) and /vibe (AI natural language playlist).
- * Prioritizes YouTube for 99% of requests, supporting direct video links, playlist URLs, and fast search.
+ * @description Streamlined Slash command handlers for /play and /vibe.
+ * Unifies single track search and playlists under one clean /play command with autocomplete.
  */
 
 import {
@@ -11,6 +11,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  PermissionFlagsBits,
   type GuildMember,
 } from 'discord.js';
 import type { GuildPlayer } from '../../player/GuildPlayer.js';
@@ -22,65 +23,69 @@ import ollama from '../../services/ollama.js';
 import curator from '../../services/curator.js';
 import vectorCurator from '../../services/vectorCurator.js';
 import featureFlags from '../../services/featureFlags.js';
-import { normalizeArtist, normalizeTrackTitle, getTrackDedupeKey } from '../../utils/trackDedupe.js';
+import dynamicSettings from '../../services/dynamicSettings.js';
+import { normalizeArtist, getTrackDedupeKey } from '../../utils/trackDedupe.js';
 
 export const playCommand = new SlashCommandBuilder()
   .setName('play')
-  .setDescription('Play a song or playlist in your voice channel')
-  .addSubcommand((sub) =>
-    sub
-      .setName('song')
-      .setDescription('Play a song by YouTube link, title, artist, or streaming link')
-      .addStringOption((opt) =>
-        opt
-          .setName('query')
-          .setDescription('YouTube URL, song title, artist, or streaming link')
-          .setRequired(true)
-      )
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('playlist')
-      .setDescription('Play a full playlist URL (YouTube, Deezer, Spotify)')
-      .addStringOption((opt) =>
-        opt
-          .setName('url')
-          .setDescription('YouTube or Deezer playlist / album URL')
-          .setRequired(true)
-      )
+  .setDescription('Play a song, artist, album, or playlist in voice')
+  .addStringOption((opt) =>
+    opt
+      .setName('query')
+      .setDescription('Song title, artist, YouTube URL, Spotify link, or playlist')
+      .setRequired(true)
+      .setAutocomplete(true)
   );
 
 export const vibeCommand = new SlashCommandBuilder()
   .setName('vibe')
-  .setDescription('AI DJ: Generate an instant playlist curated by local Ollama gemma4:e2b')
+  .setDescription('AI DJ: Generate an instant playlist curated by local Ollama AI')
   .addStringOption((opt) =>
     opt
       .setName('prompt')
-      .setDescription('Describe the vibe (e.g. "rainy night cyber drive", "90s funk barbecue")')
+      .setDescription('Describe the vibe (e.g. "rainy night cyber drive", "90s funk barbecue") or "off" to reset')
       .setRequired(true)
   );
 
 /**
- * Ensures the bot is connected to the user's voice channel.
+ * Ensures the bot is connected to the user's voice channel while enforcing anti-steal rules.
  */
 async function ensureVoiceConnection(
   interaction: ChatInputCommandInteraction,
   player: GuildPlayer
 ): Promise<boolean> {
   const member = interaction.member as GuildMember;
-  const channel = member?.voice?.channel;
+  const targetChannel = member?.voice?.channel;
 
-  if (!channel) {
+  if (!targetChannel) {
     await interaction.editReply('❌ You must be inside a voice channel to use this command!');
     return false;
   }
 
-  await player.connectToVoice(channel);
+  const currentChannel = player.getActiveVoiceChannel();
+  if (currentChannel && currentChannel.id !== targetChannel.id) {
+    // If the bot is actively playing for human listeners in another channel, block non-admins
+    const activeListeners = player.getActiveListenerUserIds();
+    const isBotAlone = activeListeners.length === 0;
+
+    const hasAdminPerm =
+      member.permissions.has(PermissionFlagsBits.ManageChannels) ||
+      member.permissions.has(PermissionFlagsBits.Administrator);
+
+    if (!isBotAlone && !hasAdminPerm) {
+      await interaction.editReply(
+        `❌ The bot is currently playing for listeners in **${currentChannel.name}**. Only server Mods/Admins can move the bot to another channel.`
+      );
+      return false;
+    }
+  }
+
+  await player.connectToVoice(targetChannel);
   return true;
 }
 
 /**
- * Handle /play song <query> and /play playlist <url>
+ * Handle unified /play <query>
  */
 export async function handlePlay(
   interaction: ChatInputCommandInteraction,
@@ -92,141 +97,28 @@ export async function handlePlay(
     return;
   }
 
-  const subcommand = interaction.options.getSubcommand();
-  const userId = interaction.user.id;
-
-  if (subcommand === 'song') {
-    const query = interaction.options.getString('query', true);
-    const parsedLink = linkParser.parseMusicLink(query);
-
-    let audioTrack: AudioTrack | null = null;
-
-    // --- Case 1: Direct YouTube Link ---
-    if (parsedLink?.provider === 'youtube') {
-      // If a playlist URL was pasted into /play song, enqueue full playlist
-      if (parsedLink.type === 'playlist' || (!parsedLink.id && parsedLink.playlistId)) {
-        const playlistId = parsedLink.playlistId || parsedLink.id;
-        const ytTracks = await youtube.getPlaylistTracks(playlistId, 50);
-        if (ytTracks.length === 0) {
-          await interaction.editReply(`❌ Could not resolve YouTube playlist from: ${query}`);
-          return;
-        }
-
-        const tracks = ytTracks.map((meta) =>
-          AudioTrack.fromYouTube(
-            meta,
-            userId,
-            true,
-            'User Request',
-            `YouTube Playlist by ${interaction.user.username}`,
-            'playlist',
-            `yt_pl_${playlistId}`,
-            `YouTube Playlist (${interaction.user.username})`
-          )
-        );
-        const enqueuedCount = await player.enqueueBatch(tracks);
-
-        const embed = new EmbedBuilder()
-          .setColor(0xff0000)
-          .setTitle('▶️ Enqueued YouTube Playlist')
-          .setDescription(`Successfully blended **${enqueuedCount} tracks** from YouTube into the queue.`)
-          .setThumbnail(ytTracks[0].artworkThumbUrl);
-
-        await interaction.editReply({ embeds: [embed] });
-        return;
-      }
-
-      // Single YouTube video
-      const ytMeta = await youtube.getTrack(parsedLink.id);
-      if (ytMeta) {
-        audioTrack = AudioTrack.fromYouTube(
-          ytMeta,
-          userId,
-          true,
-          'User Request',
-          `Requested by ${interaction.user.username}`,
-          'single'
-        );
-      }
-    }
-
-    // --- Case 2: Deezer Link ---
-    if (!audioTrack && parsedLink?.provider === 'deezer' && parsedLink.type === 'track') {
-      const dzMeta = await deezer.getTrack(parsedLink.id);
-      if (dzMeta) {
-        audioTrack = AudioTrack.fromDeezer(
-          dzMeta,
-          userId,
-          true,
-          'User Request',
-          `Requested by ${interaction.user.username}`,
-          'single'
-        );
-      }
-    }
-
-    // --- Case 3: Freeform Query -> YouTube First (99% YouTube) ---
-    if (!audioTrack && !parsedLink) {
-      const ytResults = await youtube.searchTracks(query, 1);
-      if (ytResults.length > 0) {
-        audioTrack = AudioTrack.fromYouTube(
-          ytResults[0],
-          userId,
-          true,
-          'YouTube Search',
-          `Requested by ${interaction.user.username}`,
-          'single'
-        );
-      } else {
-        // Fallback to Deezer search if YouTube search yields zero
-        const dzResults = await deezer.searchTracks(query, 1);
-        if (dzResults.length > 0) {
-          audioTrack = AudioTrack.fromDeezer(
-            dzResults[0],
-            userId,
-            true,
-            'User Request',
-            `Requested by ${interaction.user.username}`,
-            'single'
-          );
-        }
-      }
-    }
-
-    if (!audioTrack) {
-      await interaction.editReply(`❌ Could not find track matching: **${query}**`);
+  const member = interaction.member as GuildMember;
+  if (dynamicSettings.getBoolean('curation_dj_only_queue', false)) {
+    const hasAdminPerm =
+      member.permissions.has(PermissionFlagsBits.ManageChannels) ||
+      member.permissions.has(PermissionFlagsBits.Administrator);
+    if (!hasAdminPerm) {
+      await interaction.editReply('🔒 **DJ-Only Queue is enabled.** Only server Mods/Admins can queue songs right now.');
       return;
     }
+  }
 
-    await player.enqueue(audioTrack);
+  const query = interaction.options.getString('query', true).trim();
+  const userId = interaction.user.id;
+  const parsedLink = linkParser.parseMusicLink(query);
 
-    const isYt = audioTrack.id.startsWith('yt_');
-    const embed = new EmbedBuilder()
-      .setColor(isYt ? 0xff0000 : 0x5865f2)
-      .setTitle(isYt ? '▶️ Enqueued from YouTube' : '🎵 Enqueued Track')
-      .setDescription(`**${audioTrack.title}**\nby **${audioTrack.artist}**`)
-      .setThumbnail(audioTrack.artworkThumbUrl)
-      .addFields(
-        {
-          name: 'Duration',
-          value: `${Math.floor(audioTrack.durationSec / 60)}:${String(audioTrack.durationSec % 60).padStart(2, '0')}`,
-          inline: true,
-        },
-        { name: 'Requested By', value: `<@${userId}>`, inline: true }
-      );
-
-    await interaction.editReply({ embeds: [embed] });
-  } else if (subcommand === 'playlist') {
-    const url = interaction.options.getString('url', true);
-    const parsedLink = linkParser.parseMusicLink(url);
-
-    // --- YouTube Playlist ---
-    if (parsedLink?.provider === 'youtube') {
+  // --- Case 1: YouTube Link (Video or Playlist) ---
+  if (parsedLink?.provider === 'youtube') {
+    if (parsedLink.type === 'playlist' || (!parsedLink.id && parsedLink.playlistId)) {
       const playlistId = parsedLink.playlistId || parsedLink.id;
       const ytTracks = await youtube.getPlaylistTracks(playlistId, 50);
-
       if (ytTracks.length === 0) {
-        await interaction.editReply(`❌ Could not resolve YouTube playlist from: ${url}`);
+        await interaction.editReply(`❌ Could not resolve YouTube playlist from: ${query}`);
         return;
       }
 
@@ -247,82 +139,157 @@ export async function handlePlay(
       const embed = new EmbedBuilder()
         .setColor(0xff0000)
         .setTitle('▶️ Enqueued YouTube Playlist')
-        .setDescription(`Successfully blended **${enqueuedCount} tracks** from YouTube into the multi-user queue.`)
+        .setDescription(`Successfully blended **${enqueuedCount} tracks** from YouTube into the queue.`)
         .setThumbnail(ytTracks[0].artworkThumbUrl);
 
       await interaction.editReply({ embeds: [embed] });
       return;
     }
 
-    // --- Deezer Album or Playlist ---
-    let tracksMeta: any[] = [];
-    let playlistTitle = 'Playlist';
-    if (parsedLink?.provider === 'deezer') {
-      if (parsedLink.type === 'album') {
-        tracksMeta = await deezer.getAlbumTracks(parsedLink.id);
-        playlistTitle = 'Deezer Album';
-      } else if (parsedLink.type === 'playlist') {
-        tracksMeta = await deezer.getPlaylistTracks(parsedLink.id);
-        playlistTitle = 'Deezer Playlist';
-      }
-    }
-
-    if (tracksMeta.length === 0) {
-      // Fallback search YouTube for playlist/album name
-      const ytSearchTracks = await youtube.searchTracks(url, 15);
-      if (ytSearchTracks.length > 0) {
-        const tracks = ytSearchTracks.map((meta) =>
-          AudioTrack.fromYouTube(
-            meta,
-            userId,
-            true,
-            'User Request',
-            `YouTube Search by ${interaction.user.username}`,
-            'playlist',
-            `yt_search_${Date.now()}`,
-            `YouTube Search by ${interaction.user.username}`
-          )
-        );
-        const enqueuedCount = await player.enqueueBatch(tracks);
-
-        const embed = new EmbedBuilder()
-          .setColor(0xff0000)
-          .setTitle('▶️ Enqueued Tracks')
-          .setDescription(`Successfully blended **${enqueuedCount} tracks** from YouTube into the queue.`)
-          .setThumbnail(ytSearchTracks[0].artworkThumbUrl);
-
-        await interaction.editReply({ embeds: [embed] });
-        return;
-      }
-    }
-
-    if (tracksMeta.length === 0) {
-      await interaction.editReply(`❌ Could not resolve playlist or album from: ${url}`);
-      return;
-    }
-
-    const plTracks = tracksMeta.map((meta) =>
-      AudioTrack.fromDeezer(
-        meta,
+    // Single YouTube video
+    const ytMeta = await youtube.getTrack(parsedLink.id);
+    if (ytMeta) {
+      const audioTrack = AudioTrack.fromYouTube(
+        ytMeta,
         userId,
         true,
         'User Request',
-        `Enqueued from playlist by ${interaction.user.username}`,
-        'playlist',
-        `dz_pl_${parsedLink?.id || Date.now()}`,
-        `${playlistTitle} (${interaction.user.username})`
-      )
-    );
-    const enqueuedCount = await player.enqueueBatch(plTracks);
+        `Requested by ${interaction.user.username}`,
+        'single'
+      );
+      await player.enqueue(audioTrack);
 
-    const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
-      .setTitle('📑 Enqueued Playlist')
-      .setDescription(`Successfully blended **${enqueuedCount} tracks** into the multi-user queue.`)
-      .setThumbnail(tracksMeta[0].artworkThumbUrl);
+      const embed = new EmbedBuilder()
+        .setColor(0xff0000)
+        .setTitle('▶️ Enqueued from YouTube')
+        .setDescription(`**${audioTrack.title}**\nby **${audioTrack.artist}**`)
+        .setThumbnail(audioTrack.artworkThumbUrl)
+        .addFields(
+          {
+            name: 'Duration',
+            value: `${Math.floor(audioTrack.durationSec / 60)}:${String(audioTrack.durationSec % 60).padStart(2, '0')}`,
+            inline: true,
+          },
+          { name: 'Requested By', value: `<@${userId}>`, inline: true }
+        );
 
-    await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
   }
+
+  // --- Case 2: Deezer Album or Playlist Link ---
+  if (parsedLink?.provider === 'deezer' && (parsedLink.type === 'album' || parsedLink.type === 'playlist')) {
+    let tracksMeta: any[] = [];
+    let playlistTitle = 'Playlist';
+    if (parsedLink.type === 'album') {
+      tracksMeta = await deezer.getAlbumTracks(parsedLink.id);
+      playlistTitle = 'Deezer Album';
+    } else {
+      tracksMeta = await deezer.getPlaylistTracks(parsedLink.id);
+      playlistTitle = 'Deezer Playlist';
+    }
+
+    if (tracksMeta.length > 0) {
+      const plTracks = tracksMeta.map((meta) =>
+        AudioTrack.fromDeezer(
+          meta,
+          userId,
+          true,
+          'User Request',
+          `Enqueued by ${interaction.user.username}`,
+          'playlist',
+          `dz_pl_${parsedLink.id}`,
+          `${playlistTitle} (${interaction.user.username})`
+        )
+      );
+      const enqueuedCount = await player.enqueueBatch(plTracks);
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle(`📑 Enqueued ${playlistTitle}`)
+        .setDescription(`Successfully blended **${enqueuedCount} tracks** into the queue.`)
+        .setThumbnail(tracksMeta[0].artworkThumbUrl);
+
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+  }
+
+  // --- Case 3: Deezer Single Track Link ---
+  if (parsedLink?.provider === 'deezer' && parsedLink.type === 'track') {
+    const dzMeta = await deezer.getTrack(parsedLink.id);
+    if (dzMeta) {
+      const audioTrack = AudioTrack.fromDeezer(
+        dzMeta,
+        userId,
+        true,
+        'User Request',
+        `Requested by ${interaction.user.username}`,
+        'single'
+      );
+      await player.enqueue(audioTrack);
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle('🎵 Enqueued Track')
+        .setDescription(`**${audioTrack.title}**\nby **${audioTrack.artist}**`)
+        .setThumbnail(audioTrack.artworkThumbUrl);
+
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+  }
+
+  // --- Case 4: Freeform Search Query (YouTube -> Deezer) ---
+  let audioTrack: AudioTrack | null = null;
+  const ytResults = await youtube.searchTracks(query, 1);
+  if (ytResults.length > 0) {
+    audioTrack = AudioTrack.fromYouTube(
+      ytResults[0],
+      userId,
+      true,
+      'YouTube Search',
+      `Requested by ${interaction.user.username}`,
+      'single'
+    );
+  } else {
+    const dzResults = await deezer.searchTracks(query, 1);
+    if (dzResults.length > 0) {
+      audioTrack = AudioTrack.fromDeezer(
+        dzResults[0],
+        userId,
+        true,
+        'User Request',
+        `Requested by ${interaction.user.username}`,
+        'single'
+      );
+    }
+  }
+
+  if (!audioTrack) {
+    await interaction.editReply(`❌ Could not find track matching: **${query}**`);
+    return;
+  }
+
+  await player.enqueue(audioTrack);
+
+  const isYt = audioTrack.id.startsWith('yt_');
+  const embed = new EmbedBuilder()
+    .setColor(isYt ? 0xff0000 : 0x5865f2)
+    .setTitle(isYt ? '▶️ Enqueued Track' : '🎵 Enqueued Track')
+    .setDescription(`**${audioTrack.title}**\nby **${audioTrack.artist}**`)
+    .setThumbnail(audioTrack.artworkThumbUrl)
+    .addFields(
+      {
+        name: 'Duration',
+        value: `${Math.floor(audioTrack.durationSec / 60)}:${String(audioTrack.durationSec % 60).padStart(2, '0')}`,
+        inline: true,
+      },
+      { name: 'Requested By', value: `<@${userId}>`, inline: true }
+    );
+
+  await interaction.editReply({ embeds: [embed] });
 }
 
 /**
@@ -347,7 +314,7 @@ export async function handleVibe(
     vectorCurator.setVibeSteering('', null);
     await player.recurateAutoplayBuffer();
     await interaction.editReply({
-      content: '✨ **384-d Latent Vibe Steering Disengaged.** Autoplay buffer purged and restored to natural room listener consensus.',
+      content: '✨ **Latent Vibe Steering Disengaged.** Autoplay buffer restored to natural room consensus.',
       components: [],
     });
     return;
@@ -386,12 +353,10 @@ export async function handleVibe(
     return;
   }
 
-  // Track seen IDs, normalized artists, and canonical dedupe keys to eliminate duplicates
   const queuedSongIds = new Set<string>();
   const queuedArtists = new Set<string>();
   const queuedDedupeKeys = new Set<string>();
 
-  // Seed with currently playing track
   if (player.currentTrack) {
     queuedSongIds.add(player.currentTrack.id);
     queuedArtists.add(player.currentTrack.artist.toLowerCase());
@@ -400,7 +365,6 @@ export async function handleVibe(
     queuedDedupeKeys.add(getTrackDedupeKey(player.currentTrack.title, player.currentTrack.artist));
   }
 
-  // Seed with all queued tracks
   for (const q of player.getQueueList()) {
     queuedSongIds.add(q.id);
     queuedArtists.add(q.artist.toLowerCase());
@@ -412,13 +376,8 @@ export async function handleVibe(
   let queuedCount = 0;
   for (const item of vibeItems) {
     const itemNormArtist = normalizeArtist(item.artist).replace(/\s+/g, '');
-    // In a single vibe playlist, enforce strictly 1 song per artist
-    if (itemNormArtist && queuedArtists.has(itemNormArtist)) {
-      console.log(`[Vibe] Skipping duplicate artist "${item.artist}" for vibe diversity.`);
-      continue;
-    }
+    if (itemNormArtist && queuedArtists.has(itemNormArtist)) continue;
 
-    // Search YouTube first for the vibe recommendation
     const ytResults = await youtube.searchTracks(`${item.artist} ${item.title}`, 1);
     const ytCandidate = ytResults[0];
 
@@ -459,7 +418,6 @@ export async function handleVibe(
       }
     }
 
-    // Fallback search Deezer
     const searchRes = await deezer.searchTracks(`${item.artist} ${item.title}`, 1);
     const meta = searchRes[0];
     if (meta) {
@@ -509,7 +467,7 @@ export async function handleVibe(
         ? '🛰️ **384-d Latent Steering:** `ACTIVE` (Autoplay queue recurated to this vector)'
         : '⚡ *Standard Playlist Mode (384-d steering toggle is OFF in settings)*')
     )
-    .setFooter({ text: 'Ollama all-minilm + gemma4:e2b • Type /vibe off to disengage' });
+    .setFooter({ text: 'Ollama all-minilm • Type /vibe off to disengage' });
 
   const components: ActionRowBuilder<ButtonBuilder>[] = [];
   if (isSteeringEngaged) {

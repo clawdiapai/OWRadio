@@ -34,6 +34,7 @@ import harmonicMixing from '../services/harmonicMixing.js';
 import { normalizeArtist, normalizeTrackTitle, getTrackDedupeKey } from '../utils/trackDedupe.js';
 import tasteRadarChart from '../services/tasteRadarChart.js';
 import dynamicSettings from '../services/dynamicSettings.js';
+import vetoService from '../services/vetoService.js';
 import { sqlite, getBotState } from '../db/index.js';
 import { executeAutoResume } from '../bot/autoResume.js';
 
@@ -450,6 +451,71 @@ export function createWebServer(player: GuildPlayer) {
   app.post('/api/queue/add', handleQueueAdd);
   app.post('/api/player/queue', handleQueueAdd);
 
+  // --- Click to Jump / Skip to specific track in queue ---
+  app.post('/api/player/skip-to', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const index = typeof body.index === 'number' ? body.index : undefined;
+    const id = typeof body.id === 'string' ? body.id : undefined;
+    const target = index !== undefined ? index : id;
+    if (target === undefined) {
+      return c.json({ error: 'Missing "index" or "id" to skip to' }, 400);
+    }
+    const success = player.jumpToQueueIndex(target);
+    return c.json({ success, state: player.getStatePayload() });
+  });
+
+  // --- Instant Veto Currently Playing Track & Skip ---
+  app.post('/api/player/veto-current', requireAdminAuth, (c) => {
+    const current = player.currentTrack;
+    if (!current) return c.json({ error: 'Nothing is currently playing' }, 400);
+    vetoService.addVeto('artist', current.artist, 'manual_admin');
+    player.skip();
+    return c.json({ success: true, message: `Vetoed artist "${current.artist}" and skipped track.` });
+  });
+
+  // --- Veto / Blacklist Management Endpoints ---
+  app.get('/api/vetoes', (c) => {
+    return c.json({ vetoes: vetoService.getAllVetoes() });
+  });
+
+  app.post('/api/vetoes/add', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { targetType, name } = body;
+    if (!targetType || !name) return c.json({ error: 'Missing targetType or name' }, 400);
+    vetoService.addVeto(targetType, name, 'manual_admin');
+    if (player.currentTrack && (vetoService.isArtistVetoed(player.currentTrack.artist) || vetoService.isSongVetoed(player.currentTrack.title, player.currentTrack.artist))) {
+      player.skip();
+    }
+    return c.json({ success: true, vetoes: vetoService.getAllVetoes() });
+  });
+
+  app.post('/api/vetoes/remove', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { id } = body;
+    if (id === undefined) return c.json({ error: 'Missing id' }, 400);
+    vetoService.removeVeto(id);
+    return c.json({ success: true, vetoes: vetoService.getAllVetoes() });
+  });
+
+  // --- Wipe Taste Preferences (Requires re-entering Admin Password) ---
+  app.post('/api/preferences/wipe', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const provided = body.password || body.adminPassword || '';
+    if (!config.ADMIN_PASSWORD || provided !== config.ADMIN_PASSWORD) {
+      return c.json({ error: 'Invalid admin password. Double confirmation failed.' }, 401);
+    }
+    sqlite.prepare('DELETE FROM user_preferences').run();
+    return c.json({ success: true, message: 'Taste preferences successfully wiped.' });
+  });
+
+  // --- Quick Pop Individual Taste Preference ---
+  app.post('/api/preferences/pop', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { targetType, targetKey } = body;
+    if (!targetType || !targetKey) return c.json({ error: 'Missing targetType or targetKey' }, 400);
+    sqlite.prepare('DELETE FROM user_preferences WHERE target_type = ? AND target_key = ?').run(targetType, targetKey);
+    return c.json({ success: true });
+  });
   // --- Queue Admin Controls (Clear & Remove) ---
   app.post('/api/queue/clear', requireAdminAuth, (c) => {
     player.clearQueue();
@@ -839,7 +905,8 @@ export function createWebServer(player: GuildPlayer) {
       return c.json({ error: 'Could not generate embedding for target vibe' }, 400);
     }
 
-    stationCurator.startMorph(targetVibe, vector, body.steps || 4);
+    const morphSteps = body.steps || dynamicSettings.getNumber('curation_morph_steps', 4);
+    stationCurator.startMorph(targetVibe, vector, morphSteps);
     await player.recurateAutoplayBuffer();
     return c.json({ success: true, morph: stationCurator.getMorphState() });
   });

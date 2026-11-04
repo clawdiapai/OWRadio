@@ -1,6 +1,7 @@
 /**
  * @file controls.ts
- * @description Discord slash commands for player controls: /skip, /pause, /resume, /stop, /volume, /like, /dislike, /queue, /nowplaying.
+ * @description Discord slash commands for player controls:
+ * /skip, /pause, /resume, /stop, /clear, /remove, /queue, /shuffle, /replay, /status, /history, /like, /dislike, /volume, /join, /leave.
  */
 
 import {
@@ -8,14 +9,14 @@ import {
   ChatInputCommandInteraction,
   EmbedBuilder,
   ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
+  StringSelectMenuBuilder,
+  PermissionFlagsBits,
   type GuildMember,
 } from 'discord.js';
 import type { GuildPlayer } from '../../player/GuildPlayer.js';
 import { sqlite } from '../../db/index.js';
-import featureFlags from '../../services/featureFlags.js';
-import playerUi from '../playerUi.js';
+import vetoService from '../../services/vetoService.js';
+import dynamicSettings from '../../services/dynamicSettings.js';
 
 export const skipCommand = new SlashCommandBuilder()
   .setName('skip')
@@ -31,11 +32,42 @@ export const resumeCommand = new SlashCommandBuilder()
 
 export const stopCommand = new SlashCommandBuilder()
   .setName('stop')
-  .setDescription('Stop playback and clear the queue');
+  .setDescription('Stop playback and clear the queue (Admin only)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
+
+export const clearCommand = new SlashCommandBuilder()
+  .setName('clear')
+  .setDescription('Clear upcoming tracks from the queue without stopping current song (Admin only)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
+
+export const removeCommand = new SlashCommandBuilder()
+  .setName('remove')
+  .setDescription('Remove a song from the queue with an interactive picker');
+
+export const queueCommand = new SlashCommandBuilder()
+  .setName('queue')
+  .setDescription('View the upcoming curated queue (ephemeral, zero chat spam)');
+
+export const shuffleCommand = new SlashCommandBuilder()
+  .setName('shuffle')
+  .setDescription('Shuffle upcoming tracks in the queue');
+
+export const replayCommand = new SlashCommandBuilder()
+  .setName('replay')
+  .setDescription('Replay the currently playing track from the beginning');
+
+export const statusCommand = new SlashCommandBuilder()
+  .setName('status')
+  .setDescription('View bot ping, stream latency, uptime, and broadcast status');
+
+export const historyCommand = new SlashCommandBuilder()
+  .setName('history')
+  .setDescription('View recently played songs');
 
 export const volumeCommand = new SlashCommandBuilder()
   .setName('volume')
-  .setDescription('Set playback volume (1-100)')
+  .setDescription('Set playback volume 1-100 (Admin only)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
   .addIntegerOption((opt) =>
     opt
       .setName('percent')
@@ -47,19 +79,11 @@ export const volumeCommand = new SlashCommandBuilder()
 
 export const likeCommand = new SlashCommandBuilder()
   .setName('like')
-  .setDescription('Vote /like for the currently playing track and artist to boost future room recommendations');
+  .setDescription('Like the current track to favor this style in room recommendations');
 
 export const dislikeCommand = new SlashCommandBuilder()
   .setName('dislike')
-  .setDescription('Vote /dislike for the currently playing track and artist');
-
-export const queueCommand = new SlashCommandBuilder()
-  .setName('queue')
-  .setDescription('View the current queue and upcoming curated tracks');
-
-export const nowplayingCommand = new SlashCommandBuilder()
-  .setName('nowplaying')
-  .setDescription('View detailed metadata, artwork, and room listeners for the active song');
+  .setDescription('Dislike track (3 community dislikes in room triggers auto-veto)');
 
 export const joinCommand = new SlashCommandBuilder()
   .setName('join')
@@ -67,7 +91,8 @@ export const joinCommand = new SlashCommandBuilder()
 
 export const leaveCommand = new SlashCommandBuilder()
   .setName('leave')
-  .setDescription('Disconnect the bot from the voice channel');
+  .setDescription('Disconnect the bot from voice (Admin only)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
 
 /**
  * Handle /join
@@ -77,14 +102,33 @@ export async function handleJoin(
   player: GuildPlayer
 ): Promise<void> {
   const member = interaction.member as GuildMember;
-  const channel = member?.voice?.channel;
-  if (!channel) {
+  const targetChannel = member?.voice?.channel;
+  if (!targetChannel) {
     await interaction.reply({ content: '❌ You must be inside a voice channel to use /join!', ephemeral: true });
     return;
   }
-  await interaction.deferReply();
-  await player.connectToVoice(channel);
-  await interaction.editReply(`🔊 Joined voice channel **${channel.name}**!`);
+
+  const currentChannel = player.getActiveVoiceChannel();
+  if (currentChannel && currentChannel.id !== targetChannel.id) {
+    const activeListeners = player.getActiveListenerUserIds();
+    const isBotAlone = activeListeners.length === 0;
+
+    const hasAdminPerm =
+      member.permissions.has(PermissionFlagsBits.ManageChannels) ||
+      member.permissions.has(PermissionFlagsBits.Administrator);
+
+    if (!isBotAlone && !hasAdminPerm) {
+      await interaction.reply({
+        content: `❌ The bot is currently playing in **${currentChannel.name}**. Only Mods/Admins can move it to another channel.`,
+        ephemeral: true,
+      });
+      return;
+    }
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  await player.connectToVoice(targetChannel);
+  await interaction.editReply(`🔊 Joined voice channel **${targetChannel.name}**!`);
 }
 
 /**
@@ -95,11 +139,11 @@ export async function handleLeave(
   player: GuildPlayer
 ): Promise<void> {
   player.disconnectVoice();
-  await interaction.reply('👋 Disconnected from voice channel.');
+  await interaction.reply({ content: '👋 Disconnected from voice channel.', ephemeral: true });
 }
 
 /**
- * Handle /skip
+ * Handle /skip (Silent/ephemeral to eliminate chat clutter)
  */
 export async function handleSkip(
   interaction: ChatInputCommandInteraction,
@@ -110,9 +154,8 @@ export async function handleSkip(
     return;
   }
 
-  const skipped = player.currentTrack;
   player.skip(interaction.user.id);
-  await interaction.reply(`⏭️ Skipped **${skipped.title}** by **${skipped.artist}**`);
+  await interaction.reply({ content: '⏭️ Skipped track.', ephemeral: true });
 }
 
 /**
@@ -123,11 +166,10 @@ export async function handlePause(
   player: GuildPlayer
 ): Promise<void> {
   const success = player.pause();
-  if (success) {
-    await interaction.reply('⏸️ Playback paused.');
-  } else {
-    await interaction.reply({ content: '❌ Playback is already paused or idle.', ephemeral: true });
-  }
+  await interaction.reply({
+    content: success ? '⏸️ Playback paused.' : '❌ Playback is already paused or idle.',
+    ephemeral: true,
+  });
 }
 
 /**
@@ -138,11 +180,10 @@ export async function handleResume(
   player: GuildPlayer
 ): Promise<void> {
   const success = player.resume();
-  if (success) {
-    await interaction.reply('▶️ Playback resumed.');
-  } else {
-    await interaction.reply({ content: '❌ Playback is already playing or idle.', ephemeral: true });
-  }
+  await interaction.reply({
+    content: success ? '▶️ Playback resumed.' : '❌ Playback is already playing or idle.',
+    ephemeral: true,
+  });
 }
 
 /**
@@ -153,11 +194,199 @@ export async function handleStop(
   player: GuildPlayer
 ): Promise<void> {
   player.stop();
-  await interaction.reply('⏹️ Playback stopped and queue cleared.');
+  await interaction.reply({ content: '⏹️ Playback stopped and queue cleared.', ephemeral: true });
 }
 
 /**
- * Handle /volume <percent>
+ * Handle /clear (queue clear only)
+ */
+export async function handleClear(
+  interaction: ChatInputCommandInteraction,
+  player: GuildPlayer
+): Promise<void> {
+  player.clearUpcomingQueue();
+  await interaction.reply({ content: '🧹 Upcoming queue cleared. Autoplay buffer will replenish.', ephemeral: true });
+}
+
+/**
+ * Handle /remove (interactive selector)
+ */
+export async function handleRemove(
+  interaction: ChatInputCommandInteraction,
+  player: GuildPlayer
+): Promise<void> {
+  const queue = player.getQueueList();
+  if (queue.length === 0) {
+    await interaction.reply({ content: '📭 The queue is currently empty.', ephemeral: true });
+    return;
+  }
+
+  const options = queue.slice(0, 10).map((t, idx) => ({
+    label: `${idx + 1}. ${t.title.slice(0, 60)}`,
+    description: t.artist.slice(0, 50),
+    value: String(idx),
+  }));
+
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId('select_ui_remove_track')
+      .setPlaceholder('Choose a song to remove from the queue...')
+      .addOptions(options)
+  );
+
+  await interaction.reply({
+    content: '🗑️ **Select an upcoming song to remove:**',
+    components: [row],
+    ephemeral: true,
+  });
+}
+
+/**
+ * Handle /queue (ephemeral, zero spam)
+ */
+export async function handleQueue(
+  interaction: ChatInputCommandInteraction,
+  player: GuildPlayer
+): Promise<void> {
+  const current = player.currentTrack;
+  const queue = player.getQueueList();
+
+  if (!current && queue.length === 0) {
+    await interaction.reply({ content: '📭 The queue is currently empty.', ephemeral: true });
+    return;
+  }
+
+  const embed = new EmbedBuilder().setColor(0x5865f2).setTitle('🎶 OWRadio Playback Queue');
+
+  if (current) {
+    const elapsedSec = current.startedAtUnix ? Math.floor(Date.now() / 1000 - current.startedAtUnix) : 0;
+    const progressMin = Math.floor(elapsedSec / 60);
+    const progressSec = String(elapsedSec % 60).padStart(2, '0');
+    const totalMin = Math.floor(current.durationSec / 60);
+    const totalSec = String(current.durationSec % 60).padStart(2, '0');
+
+    embed.setDescription(
+      `**Now Playing:**\n**${current.title}** by **${current.artist}**\n` +
+        `⏱️ \`${progressMin}:${progressSec} / ${totalMin}:${totalSec}\` | Curated by: \`${current.curatedBy}\``
+    );
+    embed.setThumbnail(current.artworkThumbUrl);
+  }
+
+  if (queue.length > 0) {
+    const lines = queue.slice(0, 10).map((t, idx) => {
+      const min = Math.floor(t.durationSec / 60);
+      const sec = String(t.durationSec % 60).padStart(2, '0');
+      const tag = t.requestType === 'single' ? '⭐ VIP' : t.curatedBy;
+      return `\`${idx + 1}.\` **${t.title}** - ${t.artist} (\`${min}:${sec}\`) [${tag}]`;
+    });
+
+    if (queue.length > 10) {
+      lines.push(`*...and ${queue.length - 10} more upcoming tracks*`);
+    }
+
+    embed.addFields({ name: 'Up Next', value: lines.join('\n') });
+  }
+
+  await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+/**
+ * Handle /shuffle
+ */
+export async function handleShuffle(
+  interaction: ChatInputCommandInteraction,
+  player: GuildPlayer
+): Promise<void> {
+  const count = player.shuffleQueue();
+  await interaction.reply({ content: `🔀 Shuffled **${count} tracks** in the queue.`, ephemeral: true });
+}
+
+/**
+ * Handle /replay
+ */
+export async function handleReplay(
+  interaction: ChatInputCommandInteraction,
+  player: GuildPlayer
+): Promise<void> {
+  if (!player.currentTrack) {
+    await interaction.reply({ content: '❌ Nothing is currently playing!', ephemeral: true });
+    return;
+  }
+  player.replay();
+  await interaction.reply({ content: '🔄 Replaying current track from 0:00.', ephemeral: true });
+}
+
+/**
+ * Handle /status
+ */
+export async function handleStatus(
+  interaction: ChatInputCommandInteraction,
+  player: GuildPlayer
+): Promise<void> {
+  const uptimeSec = Math.floor(process.uptime());
+  const hours = Math.floor(uptimeSec / 3600);
+  const minutes = Math.floor((uptimeSec % 3600) / 60);
+  const seconds = uptimeSec % 60;
+  const ping = interaction.client.ws.ping;
+  const state = player.getStatePayload();
+  const bitrate = dynamicSettings.getNumber('audio_mp3_bitrate_kbps', 192);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x10b981)
+    .setTitle('⚡ OWRadio Broadcast & Engine Status')
+    .addFields(
+      { name: 'Gateway Ping', value: `\`${ping}ms\``, inline: true },
+      { name: 'Server Uptime', value: `\`${hours}h ${minutes}m ${seconds}s\``, inline: true },
+      { name: 'Audio Bitrate', value: `\`${bitrate} kbps\``, inline: true },
+      { name: 'Active Listeners', value: `\`${state.roomListeners.length} users\``, inline: true },
+      { name: 'Queue Depth', value: `\`${state.queueLength} tracks\``, inline: true },
+      { name: 'Volume Level', value: `\`${state.volume}%\``, inline: true }
+    )
+    .setFooter({ text: 'OWRadio Autonomous Audio Engine' });
+
+  await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+/**
+ * Handle /history
+ */
+export async function handleHistory(
+  interaction: ChatInputCommandInteraction,
+  _player: GuildPlayer
+): Promise<void> {
+  try {
+    const rows = sqlite.prepare(`
+      SELECT s.title, s.artist, h.played_at, h.requested_by
+      FROM playback_history h
+      JOIN songs s ON h.song_id = s.id
+      ORDER BY h.played_at DESC
+      LIMIT 10
+    `).all() as Array<{ title: string; artist: string; played_at: number; requested_by: string }>;
+
+    if (rows.length === 0) {
+      await interaction.reply({ content: '📭 No playback history recorded yet.', ephemeral: true });
+      return;
+    }
+
+    const lines = rows.map((r, i) => {
+      const date = new Date(r.played_at * 1000);
+      const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return `\`${i + 1}.\` **${r.title}** - *${r.artist}* (\`${timeStr}\`)`;
+    });
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle('📜 Recent Playback History')
+      .setDescription(lines.join('\n'));
+
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+  } catch (err) {
+    await interaction.reply({ content: `⚠️ Failed to fetch history: ${(err as Error).message}`, ephemeral: true });
+  }
+}
+
+/**
+ * Handle /volume
  */
 export async function handleVolume(
   interaction: ChatInputCommandInteraction,
@@ -165,7 +394,7 @@ export async function handleVolume(
 ): Promise<void> {
   const vol = interaction.options.getInteger('percent', true);
   player.setVolume(vol);
-  await interaction.reply(`🔊 Volume set to **${vol}%**`);
+  await interaction.reply({ content: `🔊 Volume set to **${vol}%**`, ephemeral: true });
 }
 
 /**
@@ -185,7 +414,6 @@ export async function handleLike(
   const now = Math.floor(Date.now() / 1000);
 
   try {
-    // Record explicit like in user_preferences for artist
     sqlite.prepare(`
       INSERT INTO user_preferences (user_id, target_type, target_key, display_name, likes, affinity_score, updated_at)
       VALUES (?, 'artist', ?, ?, 1, 3.0, ?)
@@ -195,7 +423,6 @@ export async function handleLike(
         updated_at = ?
     `).run(userId, track.artist.toLowerCase(), track.artist, now, now);
 
-    // Record for song
     sqlite.prepare(`
       INSERT INTO user_preferences (user_id, target_type, target_key, display_name, likes, affinity_score, updated_at)
       VALUES (?, 'song', ?, ?, 1, 3.0, ?)
@@ -205,14 +432,14 @@ export async function handleLike(
         updated_at = ?
     `).run(userId, track.id, track.title, now, now);
 
-    await interaction.reply(`❤️ You liked **${track.title}** by **${track.artist}**! VEXO will favor this style for you.`);
+    await interaction.reply({ content: `❤️ Saved **${track.title}** by **${track.artist}** to your favorites!`, ephemeral: true });
   } catch (err) {
     await interaction.reply({ content: `⚠️ Could not record like: ${(err as Error).message}`, ephemeral: true });
   }
 }
 
 /**
- * Handle /dislike
+ * Handle /dislike (Downvotes affinity; 3 room dislikes triggers auto-veto)
  */
 export async function handleDislike(
   interaction: ChatInputCommandInteraction,
@@ -237,86 +464,56 @@ export async function handleDislike(
         updated_at = ?
     `).run(userId, track.artist.toLowerCase(), track.artist, now, now);
 
-    const listeners = player.getActiveListenerUserIds();
-    // If listener is alone in channel, dislike immediately skips
-    if (listeners.length <= 1) {
-      player.skip(userId);
-      await interaction.reply(`💔 Disliked **${track.title}** by **${track.artist}**. Skipped track.`);
+    // Register with vetoService for 3-dislike community threshold
+    const vetoResult = vetoService.registerDislike(track.artist, track.title, userId);
+    if (vetoResult.autoVetoed) {
+      player.skip();
+      await interaction.reply({
+        content: vetoResult.message || `🚫 **${track.artist}** has received 3 community dislikes and was vetoed from the station!`,
+        ephemeral: false,
+      });
     } else {
-      await interaction.reply(`💔 Disliked **${track.title}** by **${track.artist}**. Recorded in your taste profile.`);
+      await interaction.reply({
+        content: `💔 Recorded your dislike for **${track.title}** by **${track.artist}**. (Will not autoplay for you again)`,
+        ephemeral: true,
+      });
     }
   } catch (err) {
     await interaction.reply({ content: `⚠️ Could not record dislike: ${(err as Error).message}`, ephemeral: true });
   }
 }
 
-/**
- * Handle /queue
- */
-export async function handleQueue(
-  interaction: ChatInputCommandInteraction,
-  player: GuildPlayer
-): Promise<void> {
-  const current = player.currentTrack;
-  const queue = player.getQueueList();
-
-  if (!current && queue.length === 0) {
-    await interaction.reply('📭 The queue is currently empty.');
-    return;
-  }
-
-  const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle('🎶 VEXO Playback Queue');
-
-  if (current) {
-    const elapsedSec = current.startedAtUnix ? Math.floor((Date.now() / 1000) - current.startedAtUnix) : 0;
-    const progressMin = Math.floor(elapsedSec / 60);
-    const progressSec = String(elapsedSec % 60).padStart(2, '0');
-    const totalMin = Math.floor(current.durationSec / 60);
-    const totalSec = String(current.durationSec % 60).padStart(2, '0');
-
-    embed.setDescription(
-      `**Now Playing:**\n**[${current.title}](${current.artworkUrl})** by **${current.artist}**\n` +
-      `⏱️ \`${progressMin}:${progressSec} / ${totalMin}:${totalSec}\` | Badge: \`${current.curatedBy}\``
-    );
-    embed.setThumbnail(current.artworkThumbUrl);
-  }
-
-  if (queue.length > 0) {
-    const lines = queue.slice(0, 10).map((t, idx) => {
-      const min = Math.floor(t.durationSec / 60);
-      const sec = String(t.durationSec % 60).padStart(2, '0');
-      return `\`${idx + 1}.\` **${t.title}** - ${t.artist} (\`${min}:${sec}\`) [${t.curatedBy}]`;
-    });
-
-    if (queue.length > 10) {
-      lines.push(`*...and ${queue.length - 10} more tracks*`);
-    }
-
-    embed.addFields({ name: 'Up Next', value: lines.join('\n') });
-  }
-
-  await interaction.reply({ embeds: [embed] });
-}
-
-/**
- * Handle /nowplaying
- */
-export async function handleNowPlaying(
-  interaction: ChatInputCommandInteraction,
-  player: GuildPlayer
-): Promise<void> {
-  const state = player.getStatePayload();
-  const track = state.track;
-
-  if (!track) {
-    await interaction.reply({ content: '🔇 Nothing is currently playing.', ephemeral: true });
-    return;
-  }
-
-  // Bind channel to this command's channel and render the sleek UI
-  playerUi.setBoundChannelId(interaction.channelId);
-  await interaction.reply({ content: '📻 Summoned Now Playing UI to this channel.', ephemeral: true });
-  await playerUi.repositionToBottom();
-}
+export default {
+  skipCommand,
+  pauseCommand,
+  resumeCommand,
+  stopCommand,
+  clearCommand,
+  removeCommand,
+  queueCommand,
+  shuffleCommand,
+  replayCommand,
+  statusCommand,
+  historyCommand,
+  volumeCommand,
+  likeCommand,
+  dislikeCommand,
+  joinCommand,
+  leaveCommand,
+  handleSkip,
+  handlePause,
+  handleResume,
+  handleStop,
+  handleClear,
+  handleRemove,
+  handleQueue,
+  handleShuffle,
+  handleReplay,
+  handleStatus,
+  handleHistory,
+  handleVolume,
+  handleLike,
+  handleDislike,
+  handleJoin,
+  handleLeave,
+};

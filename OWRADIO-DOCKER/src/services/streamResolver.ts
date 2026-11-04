@@ -14,6 +14,7 @@ import deezerService, { type DeezerTrackMetadata } from './deezer.js';
 import youtubeService from './youtube.js';
 import vault from './vault.js';
 import featureFlags from './featureFlags.js';
+import dynamicSettings from './dynamicSettings.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -65,13 +66,62 @@ const UNWANTED_VARIANTS = [
 ];
 
 /**
- * Checks if a candidate title contains unwanted variant keywords that aren't part of the canonical title.
+ * Checks if a candidate title contains unwanted variant keywords that aren't part of the canonical title,
+ * dynamically respecting granular toggles (Lives, Covers, Instrumentals, Remixes).
  */
 function isVariantClean(candidateTitle: string, canonicalTitle: string): boolean {
   const normCandidate = candidateTitle.toLowerCase();
   const normCanonical = canonicalTitle.toLowerCase();
 
-  for (const word of UNWANTED_VARIANTS) {
+  const liveFilter = dynamicSettings.getString('curation_filter_live', 'high_quality');
+  const coverFilter = dynamicSettings.getString('curation_filter_covers', 'high_quality');
+  const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'high_quality');
+  const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'high_quality');
+
+  // Check live keywords if live is not set to 'any'
+  if (liveFilter !== 'any') {
+    const liveWords = ['live at', 'live from', 'in concert', 'live 19', 'live 20', 'acoustic live', 'unplugged'];
+    for (const w of liveWords) {
+      if (normCandidate.includes(w) && !normCanonical.includes(w)) {
+        return false;
+      }
+    }
+  }
+
+  // Check covers keywords if covers is not set to 'any'
+  if (coverFilter !== 'any') {
+    const coverWords = ['acoustic cover', 'cover by', 'cover version', 'tribute band', 'karaoke'];
+    for (const w of coverWords) {
+      if (normCandidate.includes(w) && !normCanonical.includes(w)) {
+        return false;
+      }
+    }
+  }
+
+  // Check instrumentals if instrumentals is not set to 'any'
+  if (instrumentalFilter !== 'any') {
+    const instWords = ['instrumental', 'backing track', 'karaoke', 'minus one'];
+    for (const w of instWords) {
+      if (normCandidate.includes(w) && !normCanonical.includes(w)) {
+        return false;
+      }
+    }
+  }
+
+  // Check remixes if remixes is 'none'
+  if (remixFilter === 'none') {
+    if (normCandidate.includes('remix') && !normCanonical.includes('remix')) {
+      return false;
+    }
+  }
+
+  // Always unwanted junk (earrape, meme, nightcore, tutorials)
+  const junkWords = [
+    'remake', 'parody', 'lesson', 'tutorial', 'guitar tab',
+    'slowed + reverb', 'slowed and reverb', '8d audio', 'nightcore',
+    'bass boosted', 'full album', 'compilation', 'reaction', 'podcast', 'medley', 'earrape', 'tiktok'
+  ];
+  for (const word of junkWords) {
     if (normCandidate.includes(word) && !normCanonical.includes(word)) {
       return false;
     }
@@ -248,17 +298,65 @@ export async function resolveStream(
       const uploaderLower = (c.uploader || '').toLowerCase();
       const titleLower = c.title.toLowerCase();
 
-      // Bonus for official studio / topic releases (guaranteed 0 skits / dialogue / offtopic)
+      // Strict Curation Purity Guardrail: Heavily prioritize official studio / topic releases
       let studioBonus = 0;
       if (uploaderLower.endsWith('- topic') || uploaderLower.includes('topic')) {
-        studioBonus += 15;
+        studioBonus += 50; // Pristine official studio track
       }
-      if (titleLower.includes('official audio') || titleLower.includes('audio')) {
+      if (uploaderLower.includes('vevo')) {
+        studioBonus += 30;
+      }
+      if (titleLower.includes('official audio')) {
+        studioBonus += 25;
+      } else if (titleLower.includes('audio')) {
         studioBonus += 10;
       }
       if (titleLower.includes('music video') || titleLower.includes('official video')) {
-        // Slight penalty for music videos when pristine official studio audio is available
         studioBonus -= 5;
+      }
+
+      // Dynamic Granular Quality Scoring
+      const liveFilter = dynamicSettings.getString('curation_filter_live', 'high_quality');
+      const coverFilter = dynamicSettings.getString('curation_filter_covers', 'high_quality');
+      const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'high_quality');
+      const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'high_quality');
+
+      const isOriginalLive = track.title.toLowerCase().includes('live');
+      if (titleLower.includes('live') && !isOriginalLive) {
+        if (liveFilter === 'none') {
+          studioBonus -= 200;
+        } else if (liveFilter === 'high_quality') {
+          studioBonus -= 40;
+        }
+      }
+
+      if (/\b(cover|karaoke|tribute)\b/i.test(titleLower)) {
+        if (coverFilter === 'none') {
+          studioBonus -= 200;
+        } else if (coverFilter === 'high_quality') {
+          studioBonus -= 120;
+        }
+      }
+
+      if (/\b(instrumental|backing track|karaoke)\b/i.test(titleLower)) {
+        if (instrumentalFilter === 'none') {
+          studioBonus -= 200;
+        } else if (instrumentalFilter === 'high_quality') {
+          studioBonus -= 100;
+        }
+      }
+
+      if (/\b(remix|vip mix|club mix)\b/i.test(titleLower) && !track.title.toLowerCase().includes('remix')) {
+        if (remixFilter === 'none') {
+          studioBonus -= 200;
+        } else if (remixFilter === 'high_quality') {
+          studioBonus -= 30;
+        }
+      }
+
+      // Hard penalty for unwanted junk / meme / parody / reaction / earrape
+      if (/\b(parody|reaction|tutorial|remake|mashup|earrape|meme|nightcore|slowed|bass boosted)\b/i.test(titleLower)) {
+        studioBonus -= 200;
       }
 
       return { ...c, diff, studioBonus };

@@ -99,6 +99,7 @@ function switchLevel(lvl) {
   if (lvl === 4) {
     loadFeatureFlags();
     loadSettingsSubsystems();
+    loadVetoes();
   }
 }
 
@@ -306,7 +307,7 @@ async function fetchQueue() {
     }
 
     queueBox.innerHTML = data.upcoming
-      .map((t) => {
+      .map((t, idx) => {
         let badgeHtml = escapeHtml(t.curatedBy || 'Upcoming');
         let badgeStyle = '';
         if (t.requestType === 'single') {
@@ -317,7 +318,7 @@ async function fetchQueue() {
           badgeStyle = 'background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);';
         }
         return `
-      <div class="queue-item">
+      <div class="queue-item" style="cursor: pointer;" onclick="skipToQueueIndex(${idx})" title="Click to jump and play immediately">
         <img class="queue-thumb" src="${t.artworkThumbUrl || t.artworkUrl || ''}" alt="thumb">
         <div class="queue-meta">
           <div class="queue-title">${escapeHtml(t.title)}</div>
@@ -1071,6 +1072,7 @@ function renderPreferencesTable() {
         <td style="color: #f59e0b;">-${p.early_skips || 0}</td>
         <td style="color: #f87171;">-${p.dislikes || 0}</td>
         <td style="font-size: 12px; color: var(--text-subtle);">${formatTimeAgo(p.updated_at)}</td>
+        <td><button class="btn btn-danger" style="padding: 3px 8px; font-size: 11px;" onclick="popPreference('${p.target_type}', '${escapeJs(p.target_key)}')" title="Quick Pop from Taste Profile">✕</button></td>
       </tr>
     `;
   }).join('');
@@ -2514,4 +2516,183 @@ async function triggerServerRestart() {
   } catch (err) {
     showToast(`Error initiating restart: ${err.message}`, 'error');
   }
+}
+
+
+// ⏩ Click to Jump to Song in Queue
+async function skipToQueueIndex(index) {
+  try {
+    const res = await fetch('/api/player/skip-to', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index }),
+    });
+    if (res.status === 401) {
+      openAuthModal();
+      return;
+    }
+    if (res.ok) {
+      showToast('⏭️ Jumped to selected track', 'success');
+      fetchQueue();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || 'Failed to jump to track', 'error');
+    }
+  } catch (err) {
+    showToast('Jump error: ' + err.message, 'error');
+  }
+}
+
+// ⚠️ Wipe All Taste Preferences with Admin Password Re-Prompt
+async function wipeAllPreferences() {
+  const pass = prompt('⚠️ DOUBLE CONFIRMATION REQUIRED:\nAre you sure you want to permanently wipe ALL listener preferences and room taste history?\n\nPlease enter the Admin Password to confirm:');
+  if (!pass) return;
+
+  try {
+    const res = await fetch('/api/preferences/wipe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pass }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('✅ All taste preferences wiped!', 'success');
+      fetchBrainData();
+    } else {
+      showToast('Wipe failed: ' + (data.error || 'Unauthorized'), 'error');
+    }
+  } catch (err) {
+    showToast('Error wiping preferences: ' + err.message, 'error');
+  }
+}
+
+// ✕ Quick Pop Single Preference
+async function popPreference(targetType, targetKey) {
+  if (!confirm('Remove "' + targetKey + '" from preferences?')) return;
+  try {
+    const res = await fetch('/api/preferences/pop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetType, targetKey }),
+    });
+    if (res.status === 401) {
+      openAuthModal();
+      return;
+    }
+    if (res.ok) {
+      showToast('Popped "' + targetKey + '" from taste profile', 'success');
+      fetchBrainData();
+    } else {
+      showToast('Failed to pop preference', 'error');
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+  }
+}
+
+// 🚫 VETO / BLACKLIST MANAGEMENT
+async function loadVetoes() {
+  try {
+    const res = await fetch('/api/vetoes');
+    if (!res.ok) return;
+    const data = await res.json();
+    renderVetoList(data.vetoes || []);
+  } catch (err) {
+    console.error('Failed to load vetoes:', err);
+  }
+}
+
+function renderVetoList(vetoes) {
+  const container = document.getElementById('settings-vetoes-list');
+  const countBadge = document.getElementById('settings-veto-count-badge');
+  if (countBadge) countBadge.innerText = vetoes.length + ' VETOED';
+  if (!container) return;
+
+  if (vetoes.length === 0) {
+    container.innerHTML = '<span style="color: var(--text-muted); font-size: 12px;">No active vetoes</span>';
+    return;
+  }
+
+  container.innerHTML = vetoes.map(function(v) {
+    return '<div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--card-border); border-radius: 8px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">' +
+      '<div>' +
+        '<span class="badge-tag" style="background: rgba(239, 68, 68, 0.2); color: #f87171; font-size: 10px; margin-right: 6px;">' + v.targetType.toUpperCase() + '</span>' +
+        '<span style="font-weight: 600; font-size: 13px; color: #fff;">' + escapeHtml(v.displayName) + '</span>' +
+        '<span style="font-size: 11px; color: var(--text-muted); margin-left: 6px;">(' + (v.reason === 'community_dislikes' ? '3 Room Dislikes' : 'Manual Admin') + ')</span>' +
+      '</div>' +
+      '<button class="btn btn-danger" style="padding: 2px 7px; font-size: 11px;" onclick="removeVetoItem(' + v.id + ')" title="Remove Veto">✕</button>' +
+    '</div>';
+  }).join('');
+}
+
+async function addVetoFromInput() {
+  const nameInput = document.getElementById('input-veto-name');
+  const typeInput = document.getElementById('select-veto-type');
+  const name = nameInput ? nameInput.value.trim() : '';
+  const targetType = typeInput ? typeInput.value : 'artist';
+  if (!name) return;
+
+  try {
+    const res = await fetch('/api/vetoes/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetType: targetType, name: name }),
+    });
+    if (res.status === 401) {
+      openAuthModal();
+      return;
+    }
+    if (res.ok) {
+      showToast('🚫 Vetoed ' + targetType + ' "' + name + '"', 'success');
+      if (nameInput) nameInput.value = '';
+      loadVetoes();
+    } else {
+      showToast('Failed to add veto', 'error');
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+  }
+}
+
+async function removeVetoItem(id) {
+  try {
+    const res = await fetch('/api/vetoes/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id }),
+    });
+    if (res.status === 401) {
+      openAuthModal();
+      return;
+    }
+    if (res.ok) {
+      showToast('Removed veto', 'success');
+      loadVetoes();
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+  }
+}
+
+async function vetoCurrentlyPlaying() {
+  if (!confirm('Permanently veto this artist from the station and skip to next track?')) return;
+  try {
+    const res = await fetch('/api/player/veto-current', { method: 'POST' });
+    if (res.status === 401) {
+      openAuthModal();
+      return;
+    }
+    if (res.ok) {
+      showToast('🚫 Artist vetoed and track skipped!', 'success');
+      loadVetoes();
+    } else {
+      showToast('Failed to veto current track', 'error');
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+  }
+}
+
+function escapeJs(str) {
+  return (str || '').replace(/'/g, "\\'");
 }

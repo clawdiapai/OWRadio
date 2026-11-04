@@ -18,6 +18,7 @@ import {
   VoiceConnectionStatus,
 } from '@discordjs/voice';
 import { Routes, type VoiceBasedChannel, type Client } from 'discord.js';
+import config from '../config.js';
 import { sqlite, getBotState, setBotState } from '../db/index.js';
 import { AudioTrack } from './AudioTrack.js';
 import { BroadcastTee } from './BroadcastTee.js';
@@ -27,6 +28,7 @@ import curator from '../services/curator.js';
 import featureFlags from '../services/featureFlags.js';
 import harmonicMixing from '../services/harmonicMixing.js';
 import stationCurator from '../services/stationCurator.js';
+import vetoService from '../services/vetoService.js';
 import dynamicSettings from '../services/dynamicSettings.js';
 import tasteRadarChart from '../services/tasteRadarChart.js';
 import { getTrackDedupeKey, isDuplicateTrack, normalizeArtist } from '../utils/trackDedupe.js';
@@ -967,15 +969,7 @@ export class GuildPlayer extends EventEmitter {
   public skip(invokingUserId?: string): boolean {
     if (!this.currentTrack) return false;
 
-    // Calculate elapsed ratio: if < threshold elapsed, log early-skip penalty
-    const elapsedSec = (Date.now() / 1000) - (this.currentTrack.startedAtUnix || (Date.now() / 1000));
-    const duration = Math.max(1, this.currentTrack.durationSec);
-    const elapsedRatio = elapsedSec / duration;
-    const penaltyThreshold = dynamicSettings.getNumber('discord_skip_penalty_ratio', 0.35);
-
-    if (elapsedRatio < penaltyThreshold && invokingUserId) {
-      this.recordEarlySkipPenalty(invokingUserId, this.currentTrack);
-    }
+    // Pure Skip: Simple skipping without taste penalties. Dislikes handle preference deductions.
 
     this.consecutiveFailures = 0;
     this.currentTrackRetryCount = 0;
@@ -1245,25 +1239,10 @@ export class GuildPlayer extends EventEmitter {
   }
 
   /**
-   * Records early skip penalty in user_preferences.
+   * Pure Skip Directive: Skips do not penalize artist/track preferences.
    */
-  private recordEarlySkipPenalty(userId: string, track: AudioTrack): void {
-    const now = Math.floor(Date.now() / 1000);
-    try {
-      // Artist penalty
-      sqlite.prepare(`
-        INSERT INTO user_preferences (user_id, target_type, target_key, display_name, early_skips, affinity_score, updated_at)
-        VALUES (?, 'artist', ?, ?, 1, -1.5, ?)
-        ON CONFLICT(user_id, target_type, target_key) DO UPDATE SET
-          early_skips = early_skips + 1,
-          affinity_score = (likes * 3.0) + (full_plays * 1.0) - ((early_skips + 1) * 1.5) - (dislikes * 4.0),
-          updated_at = ?
-      `).run(userId, track.artist.toLowerCase(), track.artist, now, now);
-
-      console.log(`[GuildPlayer] Logged early-skip penalty for user ${userId} on artist "${track.artist}"`);
-    } catch (err) {
-      console.warn('[GuildPlayer] Error recording early-skip penalty:', (err as Error).message);
-    }
+  private recordEarlySkipPenalty(_userId: string, _track: AudioTrack): void {
+    // No-op: skips are treated as simple skipping
   }
 
   /**
@@ -1364,7 +1343,9 @@ export class GuildPlayer extends EventEmitter {
   /**
    * Serializes current player state for API responses.
    */
-  public getStatePayload(webBaseUrl = 'http://127.0.0.1:8091'): PlayerStatePayload {
+  public getStatePayload(webBaseUrl?: string): PlayerStatePayload {
+    const effectiveBaseUrl = config.PUBLIC_URL || webBaseUrl || `http://127.0.0.1:${config.WEB_PORT}`;
+    const cleanBaseUrl = effectiveBaseUrl.replace(/\/+$/, '');
     const elapsedSec = this.currentTrack?.startedAtUnix
       ? Math.max(0, (Date.now() / 1000) - this.currentTrack.startedAtUnix)
       : 0;
@@ -1375,7 +1356,7 @@ export class GuildPlayer extends EventEmitter {
       state: this.currentTrack ? (this.isPaused ? 'paused' : 'playing') : 'idle',
       isAutoplay: this.currentTrack ? !this.currentTrack.isManualRequest : true,
       volume: this.volume,
-      streamUrl: `${webBaseUrl}/stream.mp3`,
+      streamUrl: `${cleanBaseUrl}/stream.mp3`,
       track: this.currentTrack ? this.currentTrack.toNowPlayingJson(elapsedSec) : null,
       upNext: upNextTrack
         ? {
@@ -1420,6 +1401,64 @@ export class GuildPlayer extends EventEmitter {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Jumps directly to a song in the queue by index or ID, removing previous songs and initiating playback.
+   */
+  public jumpToQueueIndex(indexOrId: number | string): boolean {
+    let targetIdx = -1;
+    if (typeof indexOrId === 'number') {
+      targetIdx = indexOrId;
+    } else {
+      targetIdx = this.queue.findIndex((t) => t.id === indexOrId);
+    }
+
+    if (targetIdx < 0 || targetIdx >= this.queue.length) {
+      return false;
+    }
+
+    // Move target track to front of queue and drop preceding skipped ones
+    const targetTrack = this.queue[targetIdx];
+    this.queue.splice(0, targetIdx);
+    this.skip();
+    return true;
+  }
+
+  /**
+   * Replays the current track from the beginning.
+   */
+  public replay(): boolean {
+    if (!this.currentTrack) return false;
+    const track = this.currentTrack;
+    track.startedAtUnix = Math.floor(Date.now() / 1000);
+    this.queue.unshift(track);
+    this.skip();
+    return true;
+  }
+
+  /**
+   * Shuffles upcoming tracks in the queue.
+   */
+  public shuffleQueue(): number {
+    if (this.queue.length <= 1) return this.queue.length;
+    for (let i = this.queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
+    }
+    this.emitStateChange();
+    return this.queue.length;
+  }
+
+  /**
+   * Clears upcoming queue tracks without halting current song.
+   */
+  public clearUpcomingQueue(): void {
+    this.queue = [];
+    if (this.autoplayEnabled) {
+      this.replenishAutoplayBuffer().catch(() => {});
+    }
+    this.emitStateChange();
   }
 
   private emitStateChange(): void {

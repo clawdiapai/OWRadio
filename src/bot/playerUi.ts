@@ -460,10 +460,10 @@ export class PlayerUiService {
         .setLabel('Vibe')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId('btn_ui_stop')
-        .setEmoji('⏹️')
-        .setLabel('Stop')
-        .setStyle(ButtonStyle.Danger)
+        .setCustomId('btn_ui_queue')
+        .setEmoji('📋')
+        .setLabel('Queue')
+        .setStyle(ButtonStyle.Secondary)
     );
 
     return { embed, components: [row] };

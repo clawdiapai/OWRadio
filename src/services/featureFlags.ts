@@ -79,14 +79,7 @@ export const FEATURE_DEFINITIONS: FeatureFlagDefinition[] = [
     defaultValue: true,
     icon: '💾',
   },
-  {
-    id: 'feature_reaction_tuning',
-    name: 'Discord Reaction-Driven Preference Tuning',
-    description: 'Interactive buttons (🔥, ❤️, 💤, ⏭️) on Discord now-playing embeds updating live listener affinities.',
-    category: 'Discord',
-    defaultValue: true,
-    icon: '🔥',
-  },
+
   {
     id: 'feature_taste_radar_chart',
     name: 'Collective Taste Fingerprint Radar Chart',

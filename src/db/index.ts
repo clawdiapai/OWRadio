@@ -120,6 +120,17 @@ function initSchema(): void {
 
     CREATE INDEX IF NOT EXISTS idx_brain_logs_timestamp ON brain_logs(timestamp);
 
+    -- Permanently vetoed / blacklisted artists and songs
+    CREATE TABLE IF NOT EXISTS vetoed_catalog (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      target_type TEXT NOT NULL,
+      target_key TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT 'manual_admin',
+      created_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_veto_target_unique ON vetoed_catalog(target_type, target_key);
+
     -- Persistent bot state for auto-resume across restarts
     CREATE TABLE IF NOT EXISTS bot_state (
       key TEXT PRIMARY KEY,

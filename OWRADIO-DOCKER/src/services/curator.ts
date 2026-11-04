@@ -12,6 +12,7 @@ import vectorCurator from './vectorCurator.js';
 import jevCurator from './jevCurator.js';
 import brainLogger from './brainLogger.js';
 import stationCurator from './stationCurator.js';
+import vetoService from './vetoService.js';
 import featureFlags from './featureFlags.js';
 import dynamicSettings from './dynamicSettings.js';
 import collaborativeGraph from './collaborativeGraph.js';
@@ -126,6 +127,80 @@ let cached2hExpiry = 0;
  * Checks whether a track is eligible for autoplay under the 48h song and 2h artist rules.
  * Enforces strict normalized title and artist deduplication across editions and channels.
  */
+/**
+ * Evaluates track against toggle-based granular filters (Lives, Covers, Instrumentals, Remixes).
+ */
+export function isTrackAllowedByQualityFilters(title: string, artistName: string, albumTitle?: string): boolean {
+  const lowerTitle = title.toLowerCase();
+  const lowerArtist = artistName.toLowerCase();
+  const lowerAlbum = (albumTitle || '').toLowerCase();
+  const combined = `${lowerTitle} ${lowerArtist} ${lowerAlbum}`;
+
+  // 1. Live Recordings Filter
+  const liveFilter = dynamicSettings.getString('curation_filter_live', 'high_quality');
+  const isLive = /\b(live|in concert|live at|live from|tour|unplugged|live session|live lounge)\b/i.test(combined);
+  const isAmateurLive = /\b(fancam|phone recording|audience recording|crowd audio|cam recording|bootleg live|crowd noise|recorded from crowd|handheld|distorted audio)\b/i.test(combined);
+
+  if (isLive) {
+    if (liveFilter === 'none') {
+      return false; // No lives at all
+    }
+    if (liveFilter === 'high_quality' && isAmateurLive) {
+      return false; // Only high quality live
+    }
+  }
+
+  // 2. Cover Tracks Filter
+  const coverFilter = dynamicSettings.getString('curation_filter_covers', 'high_quality');
+  const isCover = /\b(cover|tribute|sung by|karaoke|acoustic cover|cover by|tribute band)\b/i.test(combined);
+  const isAmateurCover = /\b(bedroom cover|acoustic cover|cover by|tribute band|fan cover|reaction|guitar cover|drum cover|piano cover|vocal cover)\b/i.test(combined);
+
+  if (isCover) {
+    if (coverFilter === 'none') {
+      return false; // No covers at all
+    }
+    if (coverFilter === 'high_quality' && isAmateurCover) {
+      return false; // Only big artist / high quality covers
+    }
+  }
+
+  // 3. Instrumental Tracks Filter
+  const instrumentalFilter = dynamicSettings.getString('curation_filter_instrumentals', 'high_quality');
+  const isInstrumental = /\b(instrumental|backing track|minus one|karaoke|karaoke version|no vocals|off vocal)\b/i.test(combined);
+  const isLowQualityInstrumental = /\b(backing track|minus one|karaoke|type beat|fan instrumental|midi)\b/i.test(combined);
+
+  if (isInstrumental) {
+    if (instrumentalFilter === 'none') {
+      return false; // No instrumentals at all
+    }
+    if (instrumentalFilter === 'high_quality' && isLowQualityInstrumental) {
+      return false; // Only official / high quality instrumentals
+    }
+  }
+
+  // 4. Remixes & Edits Filter
+  const remixFilter = dynamicSettings.getString('curation_filter_remixes', 'high_quality');
+  const isRemix = /\b(remix|vip mix|club mix|extended mix|radio edit|dub mix)\b/i.test(combined);
+  const isJunkRemix = /\b(nightcore|slowed \+ reverb|slowed and reverb|bass boosted|8d audio|earrape|lofi remix|tiktok remix|tik tok remix|bootleg remix|meme remix)\b/i.test(combined);
+
+  if (isJunkRemix) {
+    return false; // Always discard earrape / nightcore / meme soundboard junk
+  }
+  if (isRemix) {
+    if (remixFilter === 'none') {
+      return false; // No remixes at all
+    }
+  }
+
+  // Always discard non-musical spoken words, podcasts, and interview skits
+  const nonMusicRegex = /\b(spoken\s+word|interview|skit|monologue|podcast|reaction|guitar tab|tutorial|lesson)\b/i;
+  if (nonMusicRegex.test(combined)) {
+    return false;
+  }
+
+  return true;
+}
+
 export function isTrackEligibleForAutoplay(
   songId: string,
   artistName: string,
@@ -142,14 +217,27 @@ export function isTrackEligibleForAutoplay(
     if (durationSec < minDurationSec || durationSec > maxDurationSec) {
       return false;
     }
+  }  // 0A. Hard Veto / Blacklist Filter
+  if (vetoService.isArtistVetoed(artistName)) {
+    return false;
+  }
+  if (title && vetoService.isSongVetoed(title, artistName)) {
+    return false;
   }
 
-  // 0B. Autoplay Purity Filter: Filter out classical symphony movements, orchestra recordings, and spoken word tracks
-  if (title) {
-    const classicalOrSpoken = /\b(symphony|philharmoniker|philharmonic|orchestra|concerto|allegro|andante|adagio|sonata|suite\s+no\.|op\.\s*\d+|spoken\s+word|interview|skit|monologue)\b/i;
-    if (classicalOrSpoken.test(title) || classicalOrSpoken.test(artistName)) {
+  // 0B. 95% English-Speaking Track Guardrail
+  if (dynamicSettings.getBoolean('curation_english_purity', true)) {
+    const nonLatinRegex = /[^\u0000-\u024F\u1E00-\u1EFF\s\d.,!?'"()\-&/]/g;
+    const combined = `${artistName} ${title || ''}`;
+    const nonLatinMatches = combined.match(nonLatinRegex);
+    if (nonLatinMatches && nonLatinMatches.length >= 3) {
       return false;
     }
+  }
+
+  // 0C. Granular Quality Filter Guardrail (Lives, Covers, Instrumentals, Remixes)
+  if (title && !isTrackAllowedByQualityFilters(title, artistName)) {
+    return false;
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -395,7 +483,9 @@ async function getDynamicFallbackTrack(
   }
 
   // Last resort: chart search
-  const charts = await deezer.getRandomChartTracks(0, 50);
+  const englishGenreChartIds = [132, 152, 116, 165, 85]; // Pop, Rock, Rap, R&B, Alternative
+  const selectedGenre = englishGenreChartIds[Math.floor(Math.random() * englishGenreChartIds.length)];
+  const charts = await deezer.getRandomChartTracks(selectedGenre, 50);
   const shuffledCharts = fisherYatesShuffle(charts);
   for (const track of shuffledCharts) {
     if (isTrackEligibleForAutoplay(track.id, track.artist, queuedSongIds, queuedArtists, track.title, queuedDedupeKeys, track.durationSec)) {

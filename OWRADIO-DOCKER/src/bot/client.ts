@@ -17,6 +17,7 @@ import config from '../config.js';
 import { sqlite } from '../db/index.js';
 import featureFlags from '../services/featureFlags.js';
 import vectorCurator from '../services/vectorCurator.js';
+import deezer from '../services/deezer.js';
 import type { GuildPlayer } from '../player/GuildPlayer.js';
 import { executeAutoResume } from './autoResume.js';
 import playerUi from './playerUi.js';
@@ -31,22 +32,32 @@ import {
   pauseCommand,
   resumeCommand,
   stopCommand,
+  clearCommand,
+  removeCommand,
+  shuffleCommand,
+  replayCommand,
+  statusCommand,
+  historyCommand,
   volumeCommand,
   likeCommand,
   dislikeCommand,
   queueCommand,
-  nowplayingCommand,
   joinCommand,
   leaveCommand,
   handleSkip,
   handlePause,
   handleResume,
   handleStop,
+  handleClear,
+  handleRemove,
+  handleShuffle,
+  handleReplay,
+  handleStatus,
+  handleHistory,
   handleVolume,
   handleLike,
   handleDislike,
   handleQueue,
-  handleNowPlaying,
   handleJoin,
   handleLeave,
 } from './commands/controls.js';
@@ -57,13 +68,13 @@ import {
   throwbackCommand,
   radioCommand,
   morphCommand,
-  vaultCommand,
+  vetoCommand,
   handleArtist,
   handleTaste,
   handleThrowback,
   handleRadio,
   handleMorph,
-  handleVault,
+  handleVeto,
 } from './commands/features.js';
 
 const ALL_COMMANDS = [
@@ -75,17 +86,22 @@ const ALL_COMMANDS = [
   pauseCommand,
   resumeCommand,
   stopCommand,
+  clearCommand,
+  removeCommand,
+  queueCommand,
+  shuffleCommand,
+  replayCommand,
+  statusCommand,
+  historyCommand,
   volumeCommand,
   likeCommand,
   dislikeCommand,
-  queueCommand,
-  nowplayingCommand,
   artistCommand,
   tasteCommand,
   throwbackCommand,
   radioCommand,
   morphCommand,
-  vaultCommand,
+  vetoCommand,
 ];
 
 export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
@@ -166,6 +182,53 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
       } catch {}
     }
 
+    // Handle Autocomplete for /play
+    if (interaction.isAutocomplete() && interaction.commandName === 'play') {
+      try {
+        const focused = interaction.options.getFocused();
+        if (!focused || focused.trim().length === 0) {
+          await interaction.respond([]);
+          return;
+        }
+        if (focused.startsWith('http://') || focused.startsWith('https://')) {
+          await interaction.respond([{ name: `🔗 Link: ${focused}`.slice(0, 100), value: focused.slice(0, 100) }]);
+          return;
+        }
+        const results = await deezer.searchTracks(focused, 5);
+        await interaction.respond(
+          results.map((t) => ({
+            name: `🎵 ${t.title} - ${t.artist}`.slice(0, 100),
+            value: `${t.artist} - ${t.title}`.slice(0, 100),
+          }))
+        );
+      } catch {
+        await interaction.respond([]).catch(() => {});
+      }
+      return;
+    }
+
+    // Handle StringSelectMenu for /remove
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === 'select_ui_remove_track') {
+        const idx = parseInt(interaction.values[0], 10);
+        if (isNaN(idx)) {
+          await interaction.reply({ content: '❌ Invalid track selected.', ephemeral: true });
+          return;
+        }
+        const removed = player.removeTrackAt(idx);
+        if (removed) {
+          await interaction.reply({
+            content: `🗑️ Removed **${removed.title}** by **${removed.artist}** from queue.`,
+            ephemeral: true,
+          });
+          playerUi.scheduleUpdate(false);
+        } else {
+          await interaction.reply({ content: '⚠️ Could not find track in queue.', ephemeral: true });
+        }
+        return;
+      }
+    }
+
     // Handle Button Interactions
     if (interaction.isButton()) {
       const customId = interaction.customId;
@@ -228,75 +291,8 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
         return;
       }
 
-      if (customId === 'btn_ui_stop') {
-        player.stop();
-        await interaction.deferUpdate().catch(() => {});
-        playerUi.scheduleUpdate(false);
-        return;
-      }
-
-      if (customId.startsWith('btn_tune_')) {
-        if (!featureFlags.isEnabled('feature_reaction_tuning')) {
-          await interaction.reply({
-            content: '⚠️ **Reaction-Driven Preference Tuning** is currently disabled in WebUI Settings.',
-            ephemeral: true,
-          });
-          return;
-        }
-      }
-
-      const current = player.currentTrack;
-      const userId = interaction.user.id;
-      const now = Math.floor(Date.now() / 1000);
-
-      if (customId === 'btn_tune_fire' && current) {
-        try {
-          sqlite.prepare(`
-            INSERT INTO user_preferences (user_id, target_type, target_key, display_name, likes, affinity_score, updated_at)
-            VALUES (?, 'artist', ?, ?, 1, 4.0, ?)
-            ON CONFLICT(user_id, target_type, target_key) DO UPDATE SET
-              likes = likes + 1,
-              affinity_score = ((likes + 1) * 3.0) + (full_plays * 1.0) - (early_skips * 1.5) - (dislikes * 4.0),
-              updated_at = ?
-          `).run(userId, current.artist.toLowerCase(), current.artist, now, now);
-        } catch {}
-        await interaction.reply({ content: `🔥 You hyped up **${current.title}** by **${current.artist}**! (+4.0 room affinity)`, ephemeral: true });
-        return;
-      }
-
-      if (customId === 'btn_tune_like' && current) {
-        try {
-          sqlite.prepare(`
-            INSERT INTO user_preferences (user_id, target_type, target_key, display_name, likes, affinity_score, updated_at)
-            VALUES (?, 'song', ?, ?, 1, 3.0, ?)
-            ON CONFLICT(user_id, target_type, target_key) DO UPDATE SET
-              likes = likes + 1,
-              affinity_score = ((likes + 1) * 3.0) + (full_plays * 1.0) - (early_skips * 1.5) - (dislikes * 4.0),
-              updated_at = ?
-          `).run(userId, current.id, current.title, now, now);
-        } catch {}
-        await interaction.reply({ content: `❤️ Added **${current.title}** to your favorites! (+3.0 affinity)`, ephemeral: true });
-        return;
-      }
-
-      if (customId === 'btn_tune_chill' && current) {
-        try {
-          sqlite.prepare(`
-            INSERT INTO user_preferences (user_id, target_type, target_key, display_name, full_plays, affinity_score, updated_at)
-            VALUES (?, 'genre', 'chill', 'Chill / Downtempo', 1, 1.0, ?)
-            ON CONFLICT(user_id, target_type, target_key) DO UPDATE SET
-              full_plays = full_plays + 1,
-              affinity_score = affinity_score + 1.0,
-              updated_at = ?
-          `).run(userId, now, now);
-        } catch {}
-        await interaction.reply({ content: `💤 Vibe tuned to chill & mellow! (+1.0 affinity)`, ephemeral: true });
-        return;
-      }
-
-      if (customId === 'btn_tune_skip') {
-        player.skip(userId);
-        await interaction.reply({ content: `⏭️ Skipped current track.`, ephemeral: true });
+      if (customId === 'btn_ui_queue') {
+        await handleQueue(interaction as any, player);
         return;
       }
 
@@ -340,8 +336,8 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
         case 'morph':
           await handleMorph(interaction, player);
           break;
-        case 'vault':
-          await handleVault(interaction, player);
+        case 'veto':
+          await handleVeto(interaction, player);
           break;
         case 'skip':
           await handleSkip(interaction, player);
@@ -355,6 +351,24 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
         case 'stop':
           await handleStop(interaction, player);
           break;
+        case 'clear':
+          await handleClear(interaction, player);
+          break;
+        case 'remove':
+          await handleRemove(interaction, player);
+          break;
+        case 'shuffle':
+          await handleShuffle(interaction, player);
+          break;
+        case 'replay':
+          await handleReplay(interaction, player);
+          break;
+        case 'status':
+          await handleStatus(interaction, player);
+          break;
+        case 'history':
+          await handleHistory(interaction, player);
+          break;
         case 'volume':
           await handleVolume(interaction, player);
           break;
@@ -366,9 +380,6 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
           break;
         case 'queue':
           await handleQueue(interaction, player);
-          break;
-        case 'nowplaying':
-          await handleNowPlaying(interaction, player);
           break;
         case 'join':
           await handleJoin(interaction, player);

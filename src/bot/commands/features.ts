@@ -17,6 +17,7 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   ComponentType,
+  PermissionFlagsBits,
   type GuildMember,
 } from 'discord.js';
 import type { GuildPlayer } from '../../player/GuildPlayer.js';
@@ -31,7 +32,7 @@ import playlistParser from '../../services/playlistParser.js';
 import { sqlite } from '../../db/index.js';
 import { normalizeArtist } from '../../utils/trackDedupe.js';
 import vectorCurator from '../../services/vectorCurator.js';
-import vault from '../../services/vault.js';
+import vetoService from '../../services/vetoService.js';
 
 // --- 1. /artist Command ---
 export const artistCommand = new SlashCommandBuilder()
@@ -86,6 +87,7 @@ export const tasteCommand = new SlashCommandBuilder()
 // --- 3. /throwback Command ---
 export const throwbackCommand = new SlashCommandBuilder()
   .setName('throwback')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
   .setDescription('Engage Time Capsule Mode to curate songs from a specific year or nostalgic era')
   .addIntegerOption((opt) =>
     opt.setName('year')
@@ -98,6 +100,7 @@ export const throwbackCommand = new SlashCommandBuilder()
 // --- 4. /radio Command ---
 export const radioCommand = new SlashCommandBuilder()
   .setName('radio')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
   .setDescription('Switch to an autonomous curated Radio Station preset')
   .addStringOption((opt) => {
     opt.setName('station')
@@ -113,6 +116,7 @@ export const radioCommand = new SlashCommandBuilder()
 // --- 5. /morph Command ---
 export const morphCommand = new SlashCommandBuilder()
   .setName('morph')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
   .setDescription('DJ Morph Mode: Smooth multi-track trajectory transitioning room taste to a target vibe')
   .addStringOption((opt) =>
     opt.setName('vibe')
@@ -120,10 +124,25 @@ export const morphCommand = new SlashCommandBuilder()
       .setRequired(true)
   );
 
-// --- 6. /vault Command ---
-export const vaultCommand = new SlashCommandBuilder()
-  .setName('vault')
-  .setDescription('Display Offline Audio Vault cache statistics and instant playback status');
+// --- 6. /veto Command ---
+export const vetoCommand = new SlashCommandBuilder()
+  .setName('veto')
+  .setDescription('Blacklist an artist or track from being curated or queued (Admin only)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+  .addStringOption((opt) =>
+    opt.setName('name')
+      .setDescription('Artist name or track title')
+      .setRequired(true)
+  )
+  .addStringOption((opt) =>
+    opt.setName('type')
+      .setDescription('Target type (artist or track, default: artist)')
+      .setRequired(false)
+      .addChoices(
+        { name: 'Artist', value: 'artist' },
+        { name: 'Track', value: 'track' }
+      )
+  );
 
 /**
  * Ensures user is connected to voice channel.
@@ -1109,14 +1128,15 @@ export async function handleMorph(
     return;
   }
 
-  stationCurator.startMorph(targetVibe, vector, 4);
+  const morphSteps = dynamicSettings.getNumber('curation_morph_steps', 4);
+  stationCurator.startMorph(targetVibe, vector, morphSteps);
   await player.recurateAutoplayBuffer();
 
   const embed = new EmbedBuilder()
     .setColor(0x06b6d4)
     .setTitle(`🌀 DJ Morph Mode Initiated`)
     .setDescription(
-      `Setting a **4-track latent transition trajectory** from current room taste towards:\n` +
+      `Setting a **${morphSteps}-track latent transition trajectory** from current room taste towards:\n` +
       `🎯 **Target Vibe:** *"${targetVibe}"*\n\n` +
       `Each upcoming autoplay song will smoothly shift vector coordinates by 25% until the destination aesthetic is fully reached!`
     )
@@ -1126,32 +1146,33 @@ export async function handleMorph(
 }
 
 /**
- * Handle /vault
+ * Handle /veto <name> [type]
  */
-export async function handleVault(
+export async function handleVeto(
   interaction: ChatInputCommandInteraction,
-  _player: GuildPlayer
+  player: GuildPlayer
 ): Promise<void> {
-  await interaction.deferReply();
+  const name = interaction.options.getString('name', true).trim();
+  const type = (interaction.options.getString('type') || 'artist') as 'artist' | 'track';
 
-  if (!featureFlags.isEnabled('feature_offline_vault')) {
-    await interaction.editReply('⚠️ **Instant Offline Audio Vault** is currently disabled in WebUI Settings.');
-    return;
+  const veto = vetoService.addVeto(type, name, `Blacklisted via /veto by ${interaction.user.tag}`);
+
+  // If vetoed artist or track matches currently playing, skip it
+  if (player.currentTrack) {
+    if (
+      (type === 'artist' && vetoService.isArtistVetoed(player.currentTrack.artist)) ||
+      (type === 'track' && vetoService.isTrackVetoed(player.currentTrack.title, player.currentTrack.artist))
+    ) {
+      await player.skip();
+    }
   }
 
-  const stats = vault.getStats();
-  const embed = new EmbedBuilder()
-    .setColor(0x10b981)
-    .setTitle('💾 VEXO Offline Audio Vault Cache')
-    .setDescription(
-      `Instant **0.0s playback cache** for high-frequency tracks to bypass yt-dlp latency.\n\n` +
-      `📁 **Cached Tracks:** \`${stats.count} tracks\`\n` +
-      `📦 **Disk Usage:** \`${stats.formattedSize}\` / \`2.00 GB\`\n` +
-      `⚡ **Zero-Latency Playback:** ${stats.count > 0 ? '🟢 Active & Primed' : '🟡 Awaiting Frequent Tracks'}\n\n` +
-      `*Tracks played 2 or more times are automatically cached to local storage.*`
-    )
-    .setFooter({ text: 'Cache can be cleared or managed in WebUI Settings (Level 4).' });
+  // Recurate upcoming buffer to remove any newly vetoed items
+  await player.recurateAutoplayBuffer();
 
-  await interaction.editReply({ embeds: [embed] });
+  await interaction.reply({
+    content: `🚫 **Vetoed ${type}:** "${veto.displayName}". It has been blacklisted and purged from upcoming curation.`,
+    ephemeral: true,
+  });
 }
 

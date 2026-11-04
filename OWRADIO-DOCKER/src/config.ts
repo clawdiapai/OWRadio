@@ -26,6 +26,9 @@ const envSchema = z.object({
   /** HTTP host address to bind Hono server to (default: 0.0.0.0 for external/VLC access) */
   WEB_HOST: z.string().default('0.0.0.0'),
 
+  /** Optional public URL or domain (e.g. https://myradio.duckdns.org) for reverse proxy setups */
+  PUBLIC_URL: z.string().optional(),
+
   /** Path to the SQLite WAL database file */
   DATABASE_PATH: z.string().default('./data/vexo.db'),
 

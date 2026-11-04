@@ -143,6 +143,18 @@ export const users = sqliteTable('users', {
   updatedAt: integer('updated_at').notNull(),
 });
 
+/**
+ * Permanently vetoed / blacklisted artists and songs.
+ */
+export const vetoedCatalog = sqliteTable('vetoed_catalog', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  targetType: text('target_type').notNull(), // 'artist' or 'song'
+  targetKey: text('target_key').notNull(),
+  displayName: text('display_name').notNull(),
+  reason: text('reason').notNull().default('manual_admin'),
+  createdAt: integer('created_at').notNull(),
+});
+
 export type Song = typeof songs.$inferSelect;
 export type NewSong = typeof songs.$inferInsert;
 export type PlaybackHistoryRow = typeof playbackHistory.$inferSelect;
@@ -153,3 +165,5 @@ export type StreamCacheRow = typeof streamCache.$inferSelect;
 export type NewStreamCache = typeof streamCache.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type VetoedCatalogRow = typeof vetoedCatalog.$inferSelect;
+export type NewVetoedCatalog = typeof vetoedCatalog.$inferInsert;
