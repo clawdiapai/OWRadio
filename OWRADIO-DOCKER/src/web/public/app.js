@@ -764,7 +764,7 @@ function formatCountdown(remainingSec) {
 
 function switchBrainSubTab(tab) {
   currentBrainSubTab = tab;
-  const tabs = ['llm', 'pref', 'cooldown', 'room'];
+  const tabs = ['llm', 'pref', 'cooldown', 'vetoes', 'room'];
   tabs.forEach((t) => {
     const btn = document.getElementById(`brain-tab-${t}`);
     const sec = document.getElementById(`brain-section-${t}`);
@@ -902,6 +902,9 @@ async function fetchBrainData() {
     renderPreferencesTable();
     renderCooldowns();
     renderRoomTaste();
+    renderVetoesTable();
+    const vetoesCountBadge = document.getElementById('brain-badge-vetoes-count');
+    if (vetoesCountBadge) vetoesCountBadge.innerText = (data.vetoes || []).length;
   } catch (err) {
     console.error('Error fetching brain data:', err);
   }
@@ -1200,11 +1203,20 @@ function renderRoomTaste() {
       vetoesEl.innerHTML = `<span style="color: var(--text-muted);">Zero active room vetoes (Room taste is aligned)</span>`;
     } else {
       vetoesEl.innerHTML = vetoes.map((artist) => `
-        <div class="settings-row">
+        <div class="settings-row" style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0;">
           <span style="font-weight: 600; color: #f87171;">⛔ ${escapeHtml(artist)}</span>
-          <span class="badge-tag" style="background: rgba(239, 68, 68, 0.25); color: #f87171;">VETOED</span>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <span class="badge-tag" style="background: rgba(239, 68, 68, 0.25); color: #f87171;">VETOED</span>
+            <button class="btn btn-danger" style="padding: 2px 7px; font-size: 11px;" onclick="popVetoItem('${escapeJs(artist)}', '${escapeJs(artist)}')" title="Pop from Blacklist">✕ Pop</button>
+          </div>
         </div>
-      `).join('');
+      `).join('') + `
+        <div style="margin-top: 10px; text-align: right;">
+          <a href="javascript:void(0)" onclick="switchBrainSubTab('vetoes')" style="font-size: 11px; color: #818cf8; text-decoration: none; font-weight: 600;">
+            View all in Dedicated Veto Manager (${(currentBrainData.vetoes || []).length || vetoes.length}) ↗
+          </a>
+        </div>
+      `;
     }
   }
 }
@@ -2717,4 +2729,89 @@ async function vetoCurrentlyPlaying() {
 
 function escapeJs(str) {
   return (str || '').replace(/'/g, "\\'");
+}
+
+// 🚫 Pop & Unveto Item from Blacklist (Easy 1-Click Action)
+async function popVetoItem(idOrKey, displayName) {
+  const label = displayName || idOrKey;
+  if (!confirm(`Unveto and remove "${label}" from station blacklist?`)) return;
+  try {
+    const payload = typeof idOrKey === 'number' ? { id: idOrKey } : { key: idOrKey };
+    const res = await fetch('/api/vetoes/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.status === 401) {
+      openAuthModal();
+      return;
+    }
+    if (res.ok) {
+      showToast(`Popped "${label}" from station blacklist!`, 'success');
+      await fetchBrainData();
+      if (typeof loadVetoes === 'function') loadVetoes();
+    } else {
+      showToast('Failed to pop veto', 'error');
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+  }
+}
+
+// 📋 Render Dedicated Vetoes Data Table (Sustainable for hundreds of entries)
+function renderVetoesTable() {
+  if (!currentBrainData || !currentBrainData.vetoes) return;
+  const tbody = document.getElementById('brain-vetoes-tbody');
+  const countLabel = document.getElementById('brain-veto-total-label');
+  if (!tbody) return;
+
+  const search = (document.getElementById('brain-veto-search')?.value || '').toLowerCase().trim();
+  const filtered = currentBrainData.vetoes.filter((v) => {
+    if (!search) return true;
+    return (
+      (v.displayName && v.displayName.toLowerCase().includes(search)) ||
+      (v.targetKey && v.targetKey.toLowerCase().includes(search)) ||
+      (v.targetType && v.targetType.toLowerCase().includes(search)) ||
+      (v.reason && v.reason.toLowerCase().includes(search))
+    );
+  });
+
+  if (countLabel) {
+    countLabel.innerText = `Showing ${filtered.length} of ${currentBrainData.vetoes.length} blacklisted items`;
+  }
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="5" style="text-align: center; padding: 30px; color: var(--text-muted);">
+          ${search ? `No vetoed items match "${escapeHtml(search)}".` : 'No active vetoes on the station.'}
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map((v) => {
+    const isArtist = v.targetType === 'artist';
+    const typeBadge = isArtist
+      ? `<span class="badge-tag" style="background: rgba(99, 102, 241, 0.2); color: #a5b4fc;">ARTIST</span>`
+      : `<span class="badge-tag" style="background: rgba(236, 72, 153, 0.2); color: #f472b6;">SONG</span>`;
+
+    const reasonLabel = v.reason === 'community_dislikes' ? '🚫 3 Room Dislikes' : '🛡️ Manual Admin';
+    const dateStr = v.createdAt ? formatTimeAgo(v.createdAt) : 'Recently';
+
+    return `
+      <tr>
+        <td>${typeBadge}</td>
+        <td style="font-weight: 700; color: #fff; font-size: 13px;">${escapeHtml(v.displayName || v.targetKey)}</td>
+        <td style="color: #f87171; font-size: 12px;">${escapeHtml(reasonLabel)}</td>
+        <td style="font-size: 12px; color: var(--text-subtle);">${dateStr}</td>
+        <td style="text-align: right;">
+          <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11px; font-weight: 600;" onclick="popVetoItem(${v.id}, '${escapeJs(v.displayName || v.targetKey)}')">
+            ✕ Pop
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }

@@ -53,17 +53,18 @@ export function normalizeTrackTitle(title: string, artist?: string): string {
   }
 
   clean = clean
-    // Remove content inside brackets / parens with edition keywords or video tags
-    .replace(/\s*[\(\[](?:official|music|video|audio|lyric(?:s)?|visualizer|extended|remaster(?:ed)?|radio|edit|club|album|original|mix|version|hd|hq|4k|feat\.?|ft\.?|featuring|live|deluxe|mono|stereo|bonus|acoustic).*?[\)\]]/gi, '')
+    // Remove content inside brackets / parens with edition keywords, year remasters, or video tags
+    .replace(/\s*[\(\[](?:(?:\d{4}|[a-z]+)[\s\-_/;:,]+)?(?:official|music|video|audio|lyric(?:s)?|visualizer|extended|remaster(?:ed)?|radio|edit|club|album|original|mix|version|hd|hq|4k|feat\.?|ft\.?|featuring|live|deluxe|mono|stereo|bonus|acoustic|\d{4}).*?[\)\]]/gi, '')
     // Remove any remaining empty parens or brackets
     .replace(/\s*[\(\[]\s*[\)\]]/g, '')
-    // Remove trailing dash or edition notes (e.g. "- 2011 Remaster", "- Radio Edit", "- Single Version")
-    .replace(/\s*-\s*(?:remaster(?:ed)?|radio edit|extended(?: mix| version)?|club mix|original mix|single version|\d{4} remaster).*$/gi, '')
+    // Remove trailing dash or edition notes (e.g. "- 2011 Remaster", "- Radio Edit", "- 1998 Remaster")
+    .replace(/\s*[-/|]\s*(?:remaster(?:ed)?|radio edit|extended(?: mix| version)?|club mix|original mix|single version|\d{4}\s+remaster|\d{4}\s+mix).*$/gi, '')
     // Strip non-alphanumeric characters
     .replace(/[^\w\s]/g, '')
     // Collapse multiple whitespace
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .toLowerCase();
 
   return clean;
 }

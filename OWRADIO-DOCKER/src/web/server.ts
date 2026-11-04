@@ -505,9 +505,25 @@ export function createWebServer(player: GuildPlayer) {
 
   app.post('/api/vetoes/remove', requireAdminAuth, async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const { id } = body;
-    if (id === undefined) return c.json({ error: 'Missing id' }, 400);
-    vetoService.removeVeto(id);
+    const { id, key } = body;
+    const target = id !== undefined ? id : key;
+    if (target === undefined) return c.json({ error: 'Missing id or key' }, 400);
+    vetoService.removeVeto(target);
+    if (typeof target === 'string') {
+      sqlite.prepare("DELETE FROM user_preferences WHERE target_key = ? AND dislikes > 0").run(target.toLowerCase().trim());
+    }
+    return c.json({ success: true, vetoes: vetoService.getAllVetoes() });
+  });
+
+  app.post('/api/vetoes/pop', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { id, key } = body;
+    const target = id !== undefined ? id : key;
+    if (target === undefined) return c.json({ error: 'Missing id or key' }, 400);
+    vetoService.removeVeto(target);
+    if (typeof target === 'string') {
+      sqlite.prepare("DELETE FROM user_preferences WHERE target_key = ? AND dislikes > 0").run(target.toLowerCase().trim());
+    }
     return c.json({ success: true, vetoes: vetoService.getAllVetoes() });
   });
 
@@ -632,6 +648,7 @@ export function createWebServer(player: GuildPlayer) {
     const languageCooldowns = curator.getActiveLanguageCooldowns();
 
     return c.json({
+      vetoes: vetoService.getAllVetoes(),
       model: config.OLLAMA_MODEL,
       ollamaUrl: config.OLLAMA_URL,
       currentEngine: curator.getEngine(),

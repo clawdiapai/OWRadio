@@ -263,9 +263,8 @@ export async function getRandomChartTracks(genreId = 0, limit = 50): Promise<Dee
  * Advanced search by year range or decade roulette for the 30% dynamic fallback.
  */
 export async function searchByYearRange(yearStart: number, yearEnd: number, genre?: string, limit = 30): Promise<DeezerTrackMetadata[]> {
-  const yearQuery = yearStart === yearEnd ? `year:"${yearStart}"` : `year:"${yearStart}-${yearEnd}"`;
-  const fullQuery = genre ? `${yearQuery} genre:"${genre}"` : yearQuery;
-  const data = await deezerGet<{ data: any[] }>(`/search?q=${encodeURIComponent(fullQuery)}&limit=${limit}`);
+  const query = genre ? `${genre} ${yearStart}` : `${yearStart} classics`;
+  const data = await deezerGet<{ data: any[] }>(`/search?q=${encodeURIComponent(query)}&limit=${limit}`);
   if (!data?.data) return [];
   return data.data.map(normalizeTrack);
 }

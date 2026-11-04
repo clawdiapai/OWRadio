@@ -563,10 +563,20 @@ async function getDynamicFallbackTrack(
         candidates = await deezer.getRandomChartTracks(genreId, 40);
         reason = 'Dynamic genre roulette exploration';
       } else {
-        // Roll random year between 1972 and 2024
-        const year = 1972 + Math.floor(Math.random() * 52);
-        candidates = await deezer.searchByYearRange(year, year, undefined, 40);
-        reason = `Dynamic vintage vault (${year})`;
+        // Curate authentic vintage era without querying literal keyword "years"
+        const vintageThemes = [
+          { query: '70s classic rock hits', name: '70s Classic Rock' },
+          { query: '70s soul funk classics', name: '70s Soul & Funk' },
+          { query: '80s new wave hits', name: '80s New Wave' },
+          { query: '80s classic pop anthems', name: '80s Pop Vault' },
+          { query: '90s alternative rock', name: '90s Alternative' },
+          { query: '90s grunge classics', name: '90s Grunge' },
+          { query: '2000s indie rock', name: '2000s Indie' },
+          { query: '2000s electronic classic', name: '2000s Electronic' }
+        ];
+        const theme = vintageThemes[Math.floor(Math.random() * vintageThemes.length)];
+        candidates = await deezer.searchTracks(theme.query, 40);
+        reason = `Dynamic vintage vault (${theme.name})`;
       }
     }
 
