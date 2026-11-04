@@ -450,7 +450,7 @@ export class PlayerUiService {
     const yearStr = track.releaseYear ? ` (${track.releaseYear})` : '';
     const albumStr = track.album ? `  •  💿 *${track.album}${yearStr}*` : (yearStr ? `  •  📅 *${yearStr}*` : '');
 
-    const webBaseUrl = config.PUBLIC_URL || state.streamUrl?.replace('/stream.mp3', '') || `http://127.0.0.1:${config.WEB_PORT}`;
+    const webBaseUrl = config.PUBLIC_URL || (state.streamUrl && !state.streamUrl.includes('127.0.0.1') ? state.streamUrl.replace('/stream.mp3', '') : 'https://vexo.plingindigo.org');
     const cleanWebUrl = webBaseUrl.replace(/\/+$/, '');
     const bitrate = dynamicSettings.getNumber('audio_mp3_bitrate_kbps', 192);
 
@@ -461,7 +461,7 @@ export class PlayerUiService {
         iconURL: this.client?.user?.displayAvatarURL() || undefined,
       })
       .setTitle(`🎵 ${track.title}`)
-      .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `http://${cleanWebUrl}`)
+      .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `https://${cleanWebUrl}`)
       .setDescription(
         `🎤 **${track.artist}**${albumStr}\n\n` +
         `▶ \`${formatDuration(elapsed)}\`  ${bar}  \`${formatDuration(duration)}\`  •  🔊 \`${state.volume}%\``
@@ -545,7 +545,7 @@ export class PlayerUiService {
         .setLabel('Web Radio')
         .setEmoji('🌐')
         .setStyle(ButtonStyle.Link)
-        .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `http://${cleanWebUrl}`)
+        .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `https://${cleanWebUrl}`)
     );
 
     return { embed, components: [row1, row2] };

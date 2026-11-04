@@ -131,6 +131,7 @@ interface DecodeChannel {
   decoderProcess: ChildProcessWithoutNullStreams | null;
   ytdlpProcess: ChildProcessWithoutNullStreams | null;
   pcmQueue: Buffer[];
+  playedPcmFrames: Buffer[];
   queueBytes: number;
   decoderClosed: boolean;
   audioBytesDecoded: number;
@@ -157,7 +158,7 @@ export class BroadcastTee extends EventEmitter {
 
   /** Standby preload pool (Decks B, C, D) pre-buffered and primed in RAM keyed by streamUrl */
   private standbyPool: Map<string, DecodeChannel> = new Map();
-  public static readonly MAX_STANDBY_DECKS = 3;
+  public static readonly MAX_STANDBY_DECKS = 5;
   private standbyPrimeQueue: string[] = [];
   private isPrimingNextDeck = false;
 
@@ -420,6 +421,7 @@ export class BroadcastTee extends EventEmitter {
       decoderProcess: null,
       ytdlpProcess: null,
       pcmQueue: [],
+      playedPcmFrames: [],
       queueBytes: 0,
       decoderClosed: false,
       audioBytesDecoded: 0,
@@ -715,7 +717,11 @@ export class BroadcastTee extends EventEmitter {
       channel.decoderProcess.stdout.resume();
     }
 
-    return Buffer.concat(chunksToTake);
+    const frame = chunksToTake.length === 1 ? chunksToTake[0] : Buffer.concat(chunksToTake);
+    if (channel.channelType === 'active') {
+      channel.playedPcmFrames.push(frame);
+    }
+    return frame;
   }
 
   /**
@@ -750,6 +756,7 @@ export class BroadcastTee extends EventEmitter {
     }
 
     channel.pcmQueue = [];
+    channel.playedPcmFrames = [];
     channel.queueBytes = 0;
     channel.decoderClosed = true;
   }
@@ -1083,6 +1090,41 @@ export class BroadcastTee extends EventEmitter {
       this.isPaused = false;
       this.pacerStartTime = Date.now() - (this.framesDelivered * 20);
     }
+  }
+
+  /**
+   * Instantly rewinds the currently playing track to 0:00 (0.0s latency).
+   * Restores all played PCM frames back to the head of the active channel queue without spawning yt-dlp.
+   */
+  public replayCurrentTrack(): boolean {
+    if (!this.isPlaying || !this.activeChannel) return false;
+
+    // If an incoming crossfade was underway, cancel it cleanly
+    if (this.crossfadeState) {
+      if (this.incomingChannel) {
+        this.teardownChannel(this.incomingChannel);
+        this.incomingChannel = null;
+      }
+      this.crossfadeState = null;
+    }
+
+    if (this.activeChannel.playedPcmFrames && this.activeChannel.playedPcmFrames.length > 0) {
+      const count = this.activeChannel.playedPcmFrames.length;
+      const restoredBytes = count * PCM_FRAME_SIZE;
+      console.log(
+        `[BroadcastTee] 🔄 Instant Replay! Restoring ${count} frames (${(restoredBytes / 1024).toFixed(1)} KB) back to 0:00 (0.0s latency).`
+      );
+      this.activeChannel.pcmQueue.unshift(...this.activeChannel.playedPcmFrames);
+      this.activeChannel.queueBytes += restoredBytes;
+      this.activeChannel.playedPcmFrames = [];
+      this.trailingSilenceFrames = 0;
+      this.endingSoonEmitted = false;
+      return true;
+    }
+
+    this.trailingSilenceFrames = 0;
+    this.endingSoonEmitted = false;
+    return true;
   }
 
   /**

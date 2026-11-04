@@ -7,6 +7,7 @@
 import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
+  ButtonInteraction,
   EmbedBuilder,
   ActionRowBuilder,
   StringSelectMenuBuilder,
@@ -245,7 +246,7 @@ export async function handleRemove(
  * Handle /queue (ephemeral, zero spam)
  */
 export async function handleQueue(
-  interaction: ChatInputCommandInteraction,
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
   player: GuildPlayer
 ): Promise<void> {
   const current = player.currentTrack;
@@ -285,6 +286,31 @@ export async function handleQueue(
     }
 
     embed.addFields({ name: 'Up Next', value: lines.join('\n') });
+  }
+
+  // Admin Queue Pop Selector
+  const member = interaction.member as GuildMember;
+  const hasAdminPerm =
+    member?.permissions &&
+    (member.permissions.has(PermissionFlagsBits.ManageChannels) ||
+      member.permissions.has(PermissionFlagsBits.Administrator));
+
+  if (hasAdminPerm && queue.length > 0) {
+    const options = queue.slice(0, 25).map((t, idx) => ({
+      label: `${idx + 1}. ${t.title}`.slice(0, 100),
+      description: `${t.artist} (${Math.floor(t.durationSec / 60)}:${String(t.durationSec % 60).padStart(2, '0')})`.slice(0, 100),
+      value: String(idx),
+    }));
+
+    const selectRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('select_ui_remove_track')
+        .setPlaceholder('🗑️ Select a song to pop/remove from queue...')
+        .addOptions(options)
+    );
+
+    await interaction.reply({ embeds: [embed], components: [selectRow], ephemeral: true });
+    return;
   }
 
   await interaction.reply({ embeds: [embed], ephemeral: true });

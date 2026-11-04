@@ -66,6 +66,39 @@ export class GuildPlayer extends EventEmitter {
   }
 
   private isReplenishing = false;
+  private isPreResolvingQueue = false;
+
+  /**
+   * Background pre-resolver that proactively resolves stream URLs for tracks in the queue.
+   * Guarantees that when a user clicks any track in the Web UI or skips ahead,
+   * the YouTube URL candidate is 100% pre-resolved without any search delay.
+   */
+  public async preResolveQueueStreams(): Promise<void> {
+    if (this.isPreResolvingQueue || this.queue.length === 0) return;
+    this.isPreResolvingQueue = true;
+
+    try {
+      const targets = this.queue.slice(0, 10);
+      for (const track of targets) {
+        if (!track.streamUrl) {
+          try {
+            const resolved = await streamResolver.resolveStream(track);
+            if (resolved) {
+              track.streamUrl = resolved.streamUrl;
+              if (resolved.source === 'deezer') {
+                track.durationSec = resolved.durationSec;
+              }
+            }
+          } catch (err) {
+            console.warn(`[GuildPlayer] Background queue stream resolution error for "${track.title}":`, (err as Error).message);
+          }
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      }
+    } finally {
+      this.isPreResolvingQueue = false;
+    }
+  }
   private isPlayingNext = false;
   private pendingTrack: AudioTrack | null = null;
   private isTransitioning = false;
@@ -468,7 +501,8 @@ export class GuildPlayer extends EventEmitter {
       this.consecutiveFailures = 0;
       await this.playNext();
     } else {
-      this.primeUpcomingDecks(3);
+      this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
+      this.preResolveQueueStreams();
       if (track.requestType === 'single') {
         this.attemptVipSinglePromotion(track);
       }
@@ -509,6 +543,7 @@ export class GuildPlayer extends EventEmitter {
       await this.playNext();
     } else {
       this.primeStandbyDeck();
+      this.preResolveQueueStreams();
     }
 
     this.emitStateChange();
@@ -519,7 +554,7 @@ export class GuildPlayer extends EventEmitter {
    * Pre-resolves and pre-buffers up to `depth` upcoming tracks into BroadcastTee's Multi-Deck Pool (Decks B, C, D).
    * Ensures instant 0.0s handovers even during rapid consecutive skips!
    */
-  public async primeUpcomingDecks(depth = 3): Promise<void> {
+  public async primeUpcomingDecks(depth = BroadcastTee.MAX_STANDBY_DECKS): Promise<void> {
     if (!this.broadcastTee.isPlayingActive()) return;
 
     if (this.queue.length < depth && this.autoplayEnabled) {
@@ -553,6 +588,7 @@ export class GuildPlayer extends EventEmitter {
     if (validUrls.length > 0) {
       this.broadcastTee.prepareStandbyDecks(validUrls);
     }
+    this.preResolveQueueStreams();
   }
 
   /**
@@ -1205,6 +1241,7 @@ export class GuildPlayer extends EventEmitter {
       }
 
       this.primeStandbyDeck();
+      this.preResolveQueueStreams();
       this.emitStateChange();
 
       // If currently idle, immediately start playing the replenished track
@@ -1385,6 +1422,17 @@ export class GuildPlayer extends EventEmitter {
     this.emitStateChange();
   }
 
+  /**
+   * Removes and returns the track at the specified index in the queue.
+   */
+  public removeTrackAt(idx: number): AudioTrack | null {
+    if (idx < 0 || idx >= this.queue.length) return null;
+    const [removed] = this.queue.splice(idx, 1);
+    this.emitStateChange();
+    this.primeUpcomingDecks(BroadcastTee.MAX_STANDBY_DECKS);
+    return removed || null;
+  }
+
   public removeQueueTrack(indexOrId: number | string): boolean {
     if (typeof indexOrId === 'number') {
       if (indexOrId >= 0 && indexOrId < this.queue.length) {
@@ -1418,8 +1466,10 @@ export class GuildPlayer extends EventEmitter {
       return false;
     }
 
-    // Move target track to front of queue and drop preceding skipped ones
     const targetTrack = this.queue[targetIdx];
+    console.log(`[GuildPlayer] ⏩ Jumping directly to #${targetIdx + 1} "${targetTrack.title}" by ${targetTrack.artist}`);
+
+    // Move target track to front of queue and drop preceding skipped ones
     this.queue.splice(0, targetIdx);
     this.skip();
     return true;
@@ -1430,10 +1480,17 @@ export class GuildPlayer extends EventEmitter {
    */
   public replay(): boolean {
     if (!this.currentTrack) return false;
-    const track = this.currentTrack;
-    track.startedAtUnix = Math.floor(Date.now() / 1000);
-    this.queue.unshift(track);
-    this.skip();
+    console.log(`[GuildPlayer] 🔄 Instant Replay requested for "${this.currentTrack.title}"`);
+    this.currentTrack.startedAtUnix = Math.floor(Date.now() / 1000);
+    this.pendingTrack = null;
+    this.isTransitioning = false;
+    const replayed = this.broadcastTee.replayCurrentTrack();
+    if (!replayed) {
+      this.queue.unshift(this.currentTrack);
+      this.skip();
+    }
+    this.updateVoiceChannelStatus(this.currentTrack);
+    this.emitStateChange();
     return true;
   }
 

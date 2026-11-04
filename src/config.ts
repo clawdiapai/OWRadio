@@ -27,7 +27,7 @@ const envSchema = z.object({
   WEB_HOST: z.string().default('0.0.0.0'),
 
   /** Optional public URL or domain (e.g. https://myradio.duckdns.org) for reverse proxy setups */
-  PUBLIC_URL: z.string().optional(),
+  PUBLIC_URL: z.string().default('https://vexo.plingindigo.org'),
 
   /** Path to the SQLite WAL database file */
   DATABASE_PATH: z.string().default('./data/vexo.db'),
