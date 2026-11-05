@@ -242,7 +242,8 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
 
     // Handle Button Interactions
     if (interaction.isButton()) {
-      const customId = interaction.customId;
+      try {
+        const customId = interaction.customId;
 
       // --- Minimal Sleek Player UI Controls ---
       if (customId === 'btn_ui_play_pause') {
@@ -376,7 +377,7 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
             .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `https://${cleanWebUrl}`),
           new ButtonBuilder()
             .setCustomId('btn_ui_close_ephemeral')
-            .setEmoji('✕')
+            .setEmoji('❌')
             .setLabel('Close')
             .setStyle(ButtonStyle.Danger)
         );
@@ -409,7 +410,10 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
         });
         return;
       }
+    } catch (btnErr) {
+      console.error('[DiscordBot] Button interaction error:', (btnErr as Error).message);
     }
+  }
 
     if (!interaction.isChatInputCommand()) return;
 
