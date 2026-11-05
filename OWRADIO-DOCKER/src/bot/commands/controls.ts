@@ -19,6 +19,36 @@ import { sqlite } from '../../db/index.js';
 import vetoService from '../../services/vetoService.js';
 import dynamicSettings from '../../services/dynamicSettings.js';
 
+// --- Unified /control Master Command (Option C) ---
+export const controlCommand = new SlashCommandBuilder()
+  .setName('control')
+  .setDescription('Player and queue playback controls')
+  .addSubcommand((sub) => sub.setName('skip').setDescription('Skip the currently playing track'))
+  .addSubcommand((sub) => sub.setName('pause').setDescription('Pause current playback'))
+  .addSubcommand((sub) => sub.setName('resume').setDescription('Resume paused playback'))
+  .addSubcommand((sub) => sub.setName('replay').setDescription('Replay current track from the beginning'))
+  .addSubcommand((sub) => sub.setName('queue').setDescription('View upcoming curated queue (ephemeral)'))
+  .addSubcommand((sub) => sub.setName('clear').setDescription('Clear upcoming tracks from queue (Admin only)'))
+  .addSubcommand((sub) => sub.setName('shuffle').setDescription('Shuffle upcoming tracks in queue'))
+  .addSubcommand((sub) => sub.setName('remove').setDescription('Interactive picker to remove a song from queue'))
+  .addSubcommand((sub) => sub.setName('status').setDescription('View bot ping, stream latency, and uptime'))
+  .addSubcommand((sub) => sub.setName('history').setDescription('View recently played songs'))
+  .addSubcommand((sub) => sub.setName('like').setDescription('Like current track to boost its style in room taste'))
+  .addSubcommand((sub) => sub.setName('dislike').setDescription('Dislike current track (3 room dislikes triggers auto-veto)'))
+  .addSubcommand((sub) =>
+    sub
+      .setName('volume')
+      .setDescription('Set playback volume 1-100 (Admin only)')
+      .addIntegerOption((opt) =>
+        opt
+          .setName('percent')
+          .setDescription('Volume level between 1 and 100')
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(100)
+      )
+  );
+
 export const skipCommand = new SlashCommandBuilder()
   .setName('skip')
   .setDescription('Skip the currently playing track');

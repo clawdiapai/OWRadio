@@ -33,6 +33,7 @@ import {
   handleVibe,
 } from './commands/play.js';
 import {
+  controlCommand,
   skipCommand,
   pauseCommand,
   resumeCommand,
@@ -68,6 +69,7 @@ import {
 } from './commands/controls.js';
 
 import {
+  stationCommand,
   artistCommand,
   tasteCommand,
   throwbackCommand,
@@ -87,32 +89,15 @@ import {
   handleFilterButtonInteraction,
 } from './commands/filter.js';
 
+// --- Consolidated Slash Commands List (Option C: 7 Master Commands) ---
 const ALL_COMMANDS = [
-  playCommand,
-  vibeCommand,
-  joinCommand,
-  leaveCommand,
-  skipCommand,
-  pauseCommand,
-  resumeCommand,
-  stopCommand,
-  clearCommand,
-  removeCommand,
-  queueCommand,
-  shuffleCommand,
-  replayCommand,
-  statusCommand,
-  historyCommand,
-  volumeCommand,
-  likeCommand,
-  dislikeCommand,
-  artistCommand,
-  tasteCommand,
-  throwbackCommand,
-  radioCommand,
-  morphCommand,
-  vetoCommand,
-  filterCommand,
+  playCommand,     // /play <query>
+  vibeCommand,     // /vibe <prompt>
+  controlCommand,  // /control <skip|pause|resume|replay|queue|clear|shuffle|remove|volume|status|history|like|dislike>
+  stationCommand,  // /station <preset|throwback|morph|filter|artist>
+  tasteCommand,    // /taste <profile|playlist|artists|genres|clear|veto>
+  joinCommand,     // /join
+  leaveCommand,    // /leave
 ];
 
 export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
@@ -428,6 +413,85 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
           break;
         case 'vibe':
           await handleVibe(interaction, player);
+          break;
+        case 'control': {
+          const sub = interaction.options.getSubcommand();
+          switch (sub) {
+            case 'skip':
+              await handleSkip(interaction, player);
+              break;
+            case 'pause':
+              await handlePause(interaction, player);
+              break;
+            case 'resume':
+              await handleResume(interaction, player);
+              break;
+            case 'replay':
+              await handleReplay(interaction, player);
+              break;
+            case 'queue':
+              await handleQueue(interaction, player);
+              break;
+            case 'clear':
+              await handleClear(interaction, player);
+              break;
+            case 'shuffle':
+              await handleShuffle(interaction, player);
+              break;
+            case 'remove':
+              await handleRemove(interaction, player);
+              break;
+            case 'volume':
+              await handleVolume(interaction, player);
+              break;
+            case 'status':
+              await handleStatus(interaction, player);
+              break;
+            case 'history':
+              await handleHistory(interaction, player);
+              break;
+            case 'like':
+              await handleLike(interaction, player);
+              break;
+            case 'dislike':
+              await handleDislike(interaction, player);
+              break;
+            default:
+              await interaction.reply({ content: `⚠️ Unknown control subcommand: ${sub}`, ephemeral: true });
+          }
+          break;
+        }
+        case 'station': {
+          const sub = interaction.options.getSubcommand();
+          switch (sub) {
+            case 'preset':
+              await handleRadio(interaction, player);
+              break;
+            case 'throwback':
+              await handleThrowback(interaction, player);
+              break;
+            case 'morph':
+              await handleMorph(interaction, player);
+              break;
+            case 'filter':
+              await handleFilterCommand(interaction, player);
+              break;
+            case 'artist':
+              await handleArtist(interaction, player);
+              break;
+            default:
+              await interaction.reply({ content: `⚠️ Unknown station subcommand: ${sub}`, ephemeral: true });
+          }
+          break;
+        }
+        case 'taste':
+          await handleTaste(interaction, player);
+          break;
+        case 'join':
+          await handleJoin(interaction, player);
+          break;
+        case 'leave':
+          await handleLeave(interaction, player);
           break;
         case 'artist':
           await handleArtist(interaction, player);

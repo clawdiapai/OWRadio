@@ -82,6 +82,81 @@ export const tasteCommand = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub.setName('clear')
       .setDescription('Reset your stored taste profile preferences')
+  )
+  .addSubcommand((sub) =>
+    sub.setName('veto')
+      .setDescription('Blacklist an artist or track from being curated in this room')
+      .addStringOption((opt) =>
+        opt.setName('name')
+          .setDescription('Artist or song name to blacklist')
+          .setRequired(true)
+      )
+      .addStringOption((opt) =>
+        opt.setName('type')
+          .setDescription('Blacklist type (default: artist)')
+          .addChoices({ name: 'Artist', value: 'artist' }, { name: 'Song', value: 'song' })
+      )
+  );
+
+// --- Unified /station Master Command (Option C) ---
+export const stationCommand = new SlashCommandBuilder()
+  .setName('station')
+  .setDescription('Radio presets, vintage time machine, morphing, and audio filters')
+  .addSubcommand((sub) =>
+    sub
+      .setName('preset')
+      .setDescription('Switch to a curated radio station preset or "off"')
+      .addStringOption((opt) => {
+        opt
+          .setName('station')
+          .setDescription('Select station preset or "off" to return to standard curation')
+          .setRequired(false);
+        for (const station of RADIO_STATIONS) {
+          opt.addChoices({ name: `${station.icon} ${station.name}`.slice(0, 100), value: station.id });
+        }
+        opt.addChoices({ name: '⏹️ Off (Standard Dynamic Curation)', value: 'off' });
+        return opt;
+      })
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('throwback')
+      .setDescription('Time Capsule: Curate vintage record releases from a specific year')
+      .addIntegerOption((opt) =>
+        opt
+          .setName('year')
+          .setDescription('Release year (e.g. 1984, 1997, 2005) or omit to disengage')
+          .setRequired(false)
+          .setMinValue(1950)
+          .setMaxValue(2026)
+      )
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('morph')
+      .setDescription('DJ Morph: Smoothly interpolate room taste towards a new target vibe')
+      .addStringOption((opt) =>
+        opt
+          .setName('vibe')
+          .setDescription('Target aesthetic destination (e.g. "dark synthwave", "dreampop chill")')
+          .setRequired(true)
+      )
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('filter')
+      .setDescription('Interactive audio purity & quality filter toggles (Covers, Lives, Instrumentals)')
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('artist')
+      .setDescription('Explore an artist discography with interactive album selection')
+      .addStringOption((opt) =>
+        opt
+          .setName('name')
+          .setDescription('Artist name (e.g. "Daft Punk", "Radiohead")')
+          .setRequired(true)
+      )
   );
 
 // --- 3. /throwback Command ---
@@ -744,9 +819,13 @@ export async function handleTaste(
   interaction: ChatInputCommandInteraction,
   player: GuildPlayer
 ): Promise<void> {
-  await interaction.deferReply();
-
   const sub = interaction.options.getSubcommand(false) || 'profile';
+
+  if (sub === 'veto') {
+    return handleVeto(interaction, player);
+  }
+
+  await interaction.deferReply();
 
   if (sub === 'playlist') {
     const url = interaction.options.getString('url', true);
