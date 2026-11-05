@@ -61,9 +61,9 @@ console.log('🧪 Running Foreign Language Cooldown Unit Tests...\n');
   // Insert a French song played 30 minutes ago
   const songId = 'aya_nakamura_comportement_' + now;
   sqlite.prepare(`
-    INSERT OR REPLACE INTO songs (id, title, artist, duration_sec)
-    VALUES (?, ?, ?, ?)
-  `).run(songId, 'Comportement', 'Aya Nakamura', 200);
+    INSERT OR REPLACE INTO songs (id, title, artist, duration_sec, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(songId, 'Comportement', 'Aya Nakamura', 200, now);
 
   sqlite.prepare(`
     INSERT INTO playback_history (song_id, artist_name, played_at, requested_by, is_manual_request)
@@ -87,7 +87,7 @@ console.log('🧪 Running Foreign Language Cooldown Unit Tests...\n');
   assert.strictEqual(isDadjuEligible, false, 'Dadju should be rejected due to French 120m cooldown');
   console.log('✅ History cooldown: Dadju (French) rejected within 120m cooldown window of Aya Nakamura (French)');
 
-  // Test Rosalía (Spanish) -> should be eligible as Spanish is not on cooldown
+  // Under Station English Purity: Rosalía (Spanish) is ALSO blocked when ANY foreign track played recently
   const isRosaliaEligible = isTrackEligibleForAutoplay(
     'rosalia_despecha_' + now,
     'Rosalía',
@@ -98,13 +98,22 @@ console.log('🧪 Running Foreign Language Cooldown Unit Tests...\n');
     150,
     new Set()
   );
-  assert.strictEqual(isRosaliaEligible, true, 'Spanish track should be allowed when only French is on cooldown');
-  console.log('✅ History cooldown: Rosalía (Spanish) allowed when French is on cooldown');
+  assert.strictEqual(isRosaliaEligible, false, 'Spanish track should also be rejected under station-wide English purity when French is on cooldown');
+  console.log('✅ History cooldown: Rosalía (Spanish) blocked under station-wide English purity while French cooldown is active');
 
-  // Test with language cooldown set to 15 minutes (so 30m old French play is out of cooldown)
-  dynamicSettings.set('curation_language_cooldown_minutes', 15);
-  // Sleep 6 seconds to let the 5-second cache expire or test directly
-  // We can pass a simulated future timestamp or test via setting
+  // English track remains completely eligible
+  const isColdplayEligible = isTrackEligibleForAutoplay(
+    'coldplay_yellow_' + now,
+    'Coldplay',
+    new Set(),
+    new Set(),
+    'Yellow',
+    new Set(),
+    260,
+    new Set()
+  );
+  assert.strictEqual(isColdplayEligible, true, 'English track must remain eligible');
+  console.log('✅ English purity: Coldplay (English) remains 100% eligible during foreign cooldown');
 }
 
 console.log('\n🎉 All Foreign Language Cooldown Unit Tests Passed!\n');

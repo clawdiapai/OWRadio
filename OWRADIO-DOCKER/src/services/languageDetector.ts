@@ -6,6 +6,14 @@
  */
 
 import { getTrackDedupeKey } from '../utils/trackDedupe.js';
+import eld from 'eld';
+
+// Initialize ELD (Efficient Language Detector - 60+ language NLP engine)
+try {
+  await (eld as any).load();
+} catch (err) {
+  console.warn('[LanguageDetector] Failed to load ELD language models:', (err as Error).message);
+}
 
 let dbSqlite: any = null;
 try {
@@ -15,7 +23,7 @@ try {
   // Graceful fallback for unit tests running outside full DB context
 }
 
-export type TrackLanguage = 'en' | 'fr' | 'es' | 'de' | 'it' | 'pt' | 'ru' | 'ja' | 'ko' | 'other_foreign';
+export type TrackLanguage = 'en' | 'fr' | 'es' | 'de' | 'it' | 'pt' | 'ru' | 'ja' | 'ko' | 'tr' | 'cs' | 'pl' | 'other_foreign';
 
 export const LANGUAGE_METADATA: Record<TrackLanguage, { name: string; flag: string }> = {
   en: { name: 'English', flag: '🇬🇧' },
@@ -27,6 +35,9 @@ export const LANGUAGE_METADATA: Record<TrackLanguage, { name: string; flag: stri
   ru: { name: 'Russian', flag: '🇷🇺' },
   ja: { name: 'Japanese', flag: '🇯🇵' },
   ko: { name: 'Korean', flag: '🇰🇷' },
+  tr: { name: 'Turkish', flag: '🇹🇷' },
+  cs: { name: 'Czech', flag: '🇨🇿' },
+  pl: { name: 'Polish', flag: '🇵🇱' },
   other_foreign: { name: 'Foreign / International', flag: '🌍' },
 };
 
@@ -69,6 +80,12 @@ const ISRC_COUNTRY_LANG: Record<string, TrackLanguage> = {
   // East Asian
   JP: 'ja',
   KR: 'ko',
+  // Turkish
+  TR: 'tr',
+  // Czech
+  CZ: 'cs',
+  // Polish
+  PL: 'pl',
   // Anglophone
   GB: 'en', US: 'en', CA: 'en', AU: 'en', NZ: 'en', IE: 'en',
 };
@@ -196,7 +213,7 @@ function scoreMorphemes(cleanedText: string, morphemeList: string[]): number {
 export interface DetectionResult {
   language: TrackLanguage;
   confidence: number;
-  source: 'cache_memory' | 'cache_sqlite' | 'script' | 'isrc_cascade' | 'subword_cascade' | 'english_baseline';
+  source: 'cache_memory' | 'cache_sqlite' | 'script' | 'isrc_cascade' | 'subword_cascade' | 'english_baseline' | 'lastfm_tags' | 'lyrics_nlp';
 }
 
 /**
@@ -275,6 +292,9 @@ export function detectTrackLanguageDetails(
     ru: 0,
     ja: 0,
     ko: 0,
+    tr: 0,
+    cs: 0,
+    pl: 0,
     other_foreign: 0,
   };
 
@@ -337,6 +357,18 @@ export function detectTrackLanguageDetails(
     const confidence = Math.min(0.99, Number((maxForeignScore / (maxForeignScore + scores.en + 1.0)).toFixed(2)));
     const src = isrcLang === topLang ? 'isrc_cascade' : 'subword_cascade';
     return cacheAndReturn(dedupeKey, topLang, confidence, src);
+  }
+
+  // Level 5: ELD fast title/artist classifier (only when no English markers are present)
+  if (scores.en === 0) {
+    try {
+      const eldRes = eld.detect(`${title} ${artist}`);
+      if (eldRes && eldRes.language && eldRes.language !== 'en' && eldRes.isReliable()) {
+        const detLang = eldRes.language;
+        const targetLang: TrackLanguage = (detLang in LANGUAGE_METADATA) ? (detLang as TrackLanguage) : 'other_foreign';
+        return cacheAndReturn(dedupeKey, targetLang, 0.90, 'subword_cascade');
+      }
+    } catch {}
   }
 
   return cacheAndReturn(dedupeKey, 'en', 0.95, 'english_baseline');
@@ -406,59 +438,37 @@ const NLP_LANGUAGE_PROFILES: Record<TrackLanguage, TrigramLanguageProfile> = {
   ru: { trigrams: [], stopWords: [] },
   ja: { trigrams: [], stopWords: [] },
   ko: { trigrams: [], stopWords: [] },
+  tr: { trigrams: [], stopWords: [] },
+  cs: { trigrams: [], stopWords: [] },
+  pl: { trigrams: [], stopWords: [] },
   other_foreign: { trigrams: [], stopWords: [] },
 };
 
 export function classifyLyricsText(lyrics: string): { language: TrackLanguage; confidence: number } {
-  const norm = ` ${lyrics.toLowerCase().replace(/[\r\n\t]/g, ' ').replace(/[.,!?;:"'()\-]/g, ' ').replace(/\s+/g, ' ')} `;
-  if (norm.length < 30) {
+  if (!lyrics || lyrics === '__INSTRUMENTAL__') {
+    return { language: 'en', confidence: 0.5 };
+  }
+  const clean = lyrics.replace(/\[\d+:\d+\.\d+\]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (clean.length < 25) {
     return { language: 'en', confidence: 0.5 };
   }
 
-  const scores: Record<TrackLanguage, number> = {
-    fr: 0, es: 0, de: 0, it: 0, pt: 0, en: 0, ru: 0, ja: 0, ko: 0, other_foreign: 0,
-  };
-
-  const evalLangs: TrackLanguage[] = ['fr', 'es', 'de', 'it', 'pt', 'en'];
-
-  for (const lang of evalLangs) {
-    const profile = NLP_LANGUAGE_PROFILES[lang];
-    for (const tri of profile.trigrams) {
-      let count = 0;
-      let pos = norm.indexOf(tri);
-      while (pos !== -1) {
-        count++;
-        pos = norm.indexOf(tri, pos + 1);
+  try {
+    const res = eld.detect(clean);
+    if (res && res.language) {
+      if (res.language === 'en') {
+        return { language: 'en', confidence: 0.95 };
       }
-      scores[lang] += count * 1.5;
-    }
-    for (const word of profile.stopWords) {
-      let count = 0;
-      let pos = norm.indexOf(word);
-      while (pos !== -1) {
-        count++;
-        pos = norm.indexOf(word, pos + 1);
+      if (res.language in LANGUAGE_METADATA) {
+        return { language: res.language as TrackLanguage, confidence: res.isReliable() ? 0.95 : 0.80 };
       }
-      scores[lang] += count * 4.0;
+      return { language: 'other_foreign', confidence: 0.90 };
     }
+  } catch (err) {
+    console.warn('[LanguageDetector] ELD lyrics analysis error:', (err as Error).message);
   }
 
-  const foreignLangs = (['fr', 'es', 'de', 'it', 'pt'] as TrackLanguage[]).sort((a, b) => scores[b] - scores[a]);
-  const bestForeign = foreignLangs[0];
-  const secondForeign = foreignLangs[1];
-
-  if (scores[bestForeign] > scores.en * 1.3 && scores[bestForeign] > (scores[secondForeign] || 0) * 1.15) {
-    const confidence = Math.min(0.99, Number((scores[bestForeign] / (scores[bestForeign] + scores.en + 1)).toFixed(2)));
-    return { language: bestForeign, confidence };
-  }
-
-  if (scores.en >= scores[bestForeign]) {
-    const confidence = Math.min(0.99, Number((scores.en / (scores.en + scores[bestForeign] + 1)).toFixed(2)));
-    return { language: 'en', confidence };
-  }
-
-  const confidence = Math.min(0.99, Number((scores[bestForeign] / (scores[bestForeign] + scores.en + 1)).toFixed(2)));
-  return { language: bestForeign, confidence: Math.max(0.65, confidence) };
+  return { language: 'en', confidence: 0.5 };
 }
 
 /**
@@ -483,22 +493,39 @@ async function fetchLyrics(artist: string, title: string): Promise<string | null
 }
 
 const TAG_LANG_MAP: Record<string, TrackLanguage> = {
+  // French
   french: 'fr', francais: 'fr', 'français': 'fr', 'rap francais': 'fr', 'rap français': 'fr',
   chanson: 'fr', 'chanson francaise': 'fr', 'french rock': 'fr', 'french pop': 'fr', 'variete francaise': 'fr',
+  // Spanish
   spanish: 'es', espanol: 'es', 'español': 'es', latin: 'es', latino: 'es', reggaeton: 'es',
   'rock en espanol': 'es', 'musica latina': 'es', flamenco: 'es', 'latin pop': 'es', 'trap latino': 'es',
+  // German
   german: 'de', deutsch: 'de', deutschrap: 'de', 'neue deutsche welle': 'de', 'german rock': 'de', 'schlager': 'de',
+  // Italian
   italian: 'it', italiano: 'it', 'musica italiana': 'it', 'canzone d autore': 'it', "canzone d'autore": 'it',
+  // Portuguese
   portuguese: 'pt', portugues: 'pt', 'português': 'pt', mpb: 'pt', 'bossa nova': 'pt', samba: 'pt', 'funk carioca': 'pt',
+  // Korean
+  'k-pop': 'ko', kpop: 'ko', korean: 'ko', 'k-rock': 'ko', 'k-hip-hop': 'ko', 'k-indie': 'ko', 'korean indie': 'ko',
+  // Japanese
+  'j-pop': 'ja', jpop: 'ja', japanese: 'ja', 'j-rock': 'ja', utaite: 'ja', anime: 'ja', vocaloid: 'ja', 'city pop': 'ja',
+  // Czech
+  czech: 'cs', 'czech hip-hop': 'cs', 'czech rap': 'cs', 'czech republic': 'cs', czechia: 'cs', cesky: 'cs', 'český': 'cs',
+  // Turkish
+  turkish: 'tr', 'türkçe': 'tr', turkce: 'tr', 'anatolian rock': 'tr', 'turkish rap': 'tr', 'turk rap': 'tr', 'türkçe rap': 'tr',
+  // Russian
+  russian: 'ru', 'russian rock': 'ru', 'russian rap': 'ru', 'russian pop': 'ru', sovietwave: 'ru', 'russian post-punk': 'ru',
+  // Polish
+  polish: 'pl', 'polski hip hop': 'pl', 'polski rap': 'pl', 'polish rock': 'pl',
 };
 
 /**
- * Asynchronous Lyrics-First 99.99% Foreign Language Detection Engine.
+ * Asynchronous Lyrics-First & Tag-Enriched 99.99% Foreign Language Detection Engine.
  * 1. Checks LRU + SQLite cache (<0.05ms)
  * 2. Non-Latin scripts (100% deterministic)
- * 3. LRCLIB Keyless Lyrics API (~80ms) + Trigram NLP
- * 4. Last.fm Crowdsourced Artist Tags
- * 5. Multi-Signal Morpheme & Orthography Fallback
+ * 3. Last.fm Crowdsourced Artist Tags (catches K-Pop, J-Pop, Czech, Turkish even with English titles)
+ * 4. LRCLIB Keyless Lyrics API (~80ms) + ELD 60-language NLP engine
+ * 5. Multi-Signal Morpheme, Orthography & ELD Title Fallback
  */
 export async function detectTrackLanguageAsync(
   title: string,
@@ -509,9 +536,9 @@ export async function detectTrackLanguageAsync(
 ): Promise<TrackLanguage> {
   const dedupeKey = getTrackDedupeKey(title, artist);
 
-  // 1. Level 0 & 1: Cache check
+  // 1. Level 0 & 1: Cache check (Only trust definitive signals, not unverified 'english_baseline' guesses)
   const memCached = lruCache.get(dedupeKey);
-  if (memCached) {
+  if (memCached && memCached.source !== 'english_baseline') {
     if (songId) {
       const { stmtUpdateSongLang } = getDbStatements();
       if (stmtUpdateSongLang) {
@@ -525,7 +552,7 @@ export async function detectTrackLanguageAsync(
   if (stmtGetTrackLang) {
     try {
       const row = stmtGetTrackLang.get(dedupeKey) as { language: TrackLanguage; confidence: number; source: string } | undefined;
-      if (row) {
+      if (row && row.source !== 'english_baseline') {
         lruCache.set(dedupeKey, { language: row.language, confidence: row.confidence, source: 'cache_sqlite' });
         if (songId && stmtUpdateSongLang) {
           try { stmtUpdateSongLang.run(row.language, songId); } catch {}
@@ -552,23 +579,13 @@ export async function detectTrackLanguageAsync(
     if (songId && stmtUpdateSongLang) try { stmtUpdateSongLang.run('ja', songId); } catch {}
     return 'ja';
   }
+  if (ARABIC_REGEX.test(rawCombined) || GREEK_REGEX.test(rawCombined)) {
+    cacheAndReturn(dedupeKey, 'other_foreign', 1.0, 'script');
+    if (songId && stmtUpdateSongLang) try { stmtUpdateSongLang.run('other_foreign', songId); } catch {}
+    return 'other_foreign';
+  }
 
-  // 3. Level 3: Lyrics-First Classification via LRCLIB
-  try {
-    const lyrics = await fetchLyrics(artist, title);
-    if (lyrics && lyrics !== '__INSTRUMENTAL__' && lyrics.length >= 30) {
-      const { language, confidence } = classifyLyricsText(lyrics);
-      if (confidence >= 0.65) {
-        cacheAndReturn(dedupeKey, language, confidence, 'subword_cascade');
-        if (songId && stmtUpdateSongLang) {
-          try { stmtUpdateSongLang.run(language, songId); } catch {}
-        }
-        return language;
-      }
-    }
-  } catch {}
-
-  // 4. Level 4: Last.fm Artist Crowdsourced Tags Fallback
+  // 3. Level 3: Last.fm Artist Crowdsourced Tags (Prioritized before lyrics to catch K-Pop / J-Pop / Czech bands)
   try {
     const { tasteRadarChart } = await import('./tasteRadarChart.js');
     if (tasteRadarChart && typeof tasteRadarChart.enrichArtistTags === 'function') {
@@ -577,7 +594,7 @@ export async function detectTrackLanguageAsync(
         const normTag = rawTag.toLowerCase().trim();
         const matchedLang = TAG_LANG_MAP[normTag];
         if (matchedLang) {
-          cacheAndReturn(dedupeKey, matchedLang, 0.90, 'subword_cascade');
+          cacheAndReturn(dedupeKey, matchedLang, 0.95, 'lastfm_tags');
           if (songId && stmtUpdateSongLang) {
             try { stmtUpdateSongLang.run(matchedLang, songId); } catch {}
           }
@@ -587,7 +604,20 @@ export async function detectTrackLanguageAsync(
     }
   } catch {}
 
-  // 5. Level 5: Orthography & Morpheme heuristics
+  // 4. Level 4: Lyrics-First Classification via LRCLIB + ELD
+  try {
+    const lyrics = await fetchLyrics(artist, title);
+    if (lyrics && lyrics !== '__INSTRUMENTAL__' && lyrics.length >= 25) {
+      const { language, confidence } = classifyLyricsText(lyrics);
+      cacheAndReturn(dedupeKey, language, confidence, 'lyrics_nlp');
+      if (songId && stmtUpdateSongLang) {
+        try { stmtUpdateSongLang.run(language, songId); } catch {}
+      }
+      return language;
+    }
+  } catch {}
+
+  // 5. Level 5: Orthography, Morphemes & ELD Title Heuristics
   const fallback = detectTrackLanguageDetails(title, artist, album, isrc);
   if (songId && stmtUpdateSongLang) {
     try { stmtUpdateSongLang.run(fallback.language, songId); } catch {}
