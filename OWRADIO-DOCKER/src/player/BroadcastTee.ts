@@ -28,7 +28,7 @@ export const PCM_FRAME_SIZE = 3840;
 export const SAMPLES_PER_FRAME = 1920; // 3840 / 2 (int16 samples)
 export const CROSSFADE_FRAMES = 50; // 50 * 20ms = 1.000s equal-power crossfade
 export const MIN_HANDOVER_FRAMES = 25; // 25 * 20ms = 500ms safety cushion before crossfade starts
-export const JITTER_CUSHION_FRAMES = 100; // 100 * 20ms = 2.000s deep jitter cushion protecting Discord voice against event loop latency
+export const JITTER_CUSHION_FRAMES = 150; // 150 * 20ms = 3.000s deep jitter cushion protecting Discord voice against event loop latency
 
 interface FadeStep {
   gainA: number;
