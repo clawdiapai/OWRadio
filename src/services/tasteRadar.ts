@@ -12,6 +12,7 @@ import vectorCurator from './vectorCurator.js';
 import brainLogger from './brainLogger.js';
 import dynamicSettings from './dynamicSettings.js';
 import { detectTrackLanguage } from './languageDetector.js';
+import baselineService from './baselineService.js';
 
 export const TARGET_CATALOG_SIZE = 50_000;
 const VECTOR_DIM = 384;
@@ -455,6 +456,13 @@ export class TasteRadar {
     if (globalRows.length > 0) {
       const picked = globalRows[Math.floor(Math.random() * globalRows.length)];
       return { name: picked.display_name || picked.target_key, affinityScore: picked.total_affinity };
+    }
+
+    // Baseline Fallback: Use Station DNA Baseline Artists
+    const baseline = baselineService.getBaseline();
+    if (baseline.artists.length > 0) {
+      const picked = baseline.artists[Math.floor(Math.random() * baseline.artists.length)];
+      return { name: picked, affinityScore: baseline.weight };
     }
 
     return null;

@@ -17,7 +17,8 @@ import featureFlags from './featureFlags.js';
 import dynamicSettings from './dynamicSettings.js';
 import collaborativeGraph from './collaborativeGraph.js';
 import { normalizeArtist, normalizeTrackTitle, getTrackDedupeKey } from '../utils/trackDedupe.js';
-import { detectTrackLanguage, LANGUAGE_METADATA, type TrackLanguage } from './languageDetector.js';
+import { detectTrackLanguage, detectTrackLanguageAsync, LANGUAGE_METADATA, type TrackLanguage } from './languageDetector.js';
+import baselineService from './baselineService.js';
 
 export type CurationEngineType = 'embedding' | 'jev' | 'llm' | 'hybrid';
 
@@ -358,18 +359,18 @@ export function isTrackEligibleForAutoplay(
     if (cached2hNormArtists.has(normArtist)) return false;
   }
 
-  // 4. Foreign Language Cooldown (Dynamic setting, default: 120m)
-  // Ensures foreign language tracks (French, Spanish, German, etc.) do not repeat within cooldown window
-  const langCooldownMinutes = dynamicSettings.getNumber('curation_language_cooldown_minutes', 120);
+  // 4. Global Foreign Language Cooldown (Dynamic setting, default: 1440m / 24 hours)
+  // Enforces max 1 foreign track per day across the entire station
+  const langCooldownMinutes = dynamicSettings.getNumber('curation_language_cooldown_minutes', 1440);
   if (langCooldownMinutes > 0) {
     const trackLang = detectTrackLanguage(title || '', artistName, undefined, isrc, songId);
     if (trackLang !== 'en') {
-      // 4A. In-memory queue check: no two songs in the same foreign language can be active or queued
-      if (queuedLanguages && queuedLanguages.has(trackLang)) {
+      // 4A. In-memory queue check: no foreign song can enter if any foreign track is already queued
+      if (queuedLanguages && queuedLanguages.size > 0) {
         return false;
       }
 
-      // 4B. Playback history cooldown check
+      // 4B. Playback history cooldown check: enforce maximum 1 foreign track per cooldown window across ALL languages
       const cutoffLang = now - langCooldownMinutes * 60;
       if (!cachedLanguageCooldownMap || now > cachedLanguageExpiry) {
         const recentPlays = stmtRecentPlaysLanguage.all(cutoffLang) as Array<{ title: string; artist_name: string; played_at: number }>;
@@ -384,7 +385,8 @@ export function isTrackEligibleForAutoplay(
         cachedLanguageExpiry = now + 5; // Cache for 5s to eliminate SQL loop thrashing
       }
 
-      if (cachedLanguageCooldownMap.has(trackLang)) {
+      // If ANY foreign language track has played within the cooldown window, block this candidate!
+      if (cachedLanguageCooldownMap.size > 0) {
         return false;
       }
     }
@@ -397,6 +399,8 @@ export function isTrackEligibleForAutoplay(
  * Aggregates preferences of active non-bot members currently present in the voice room.
  */
 export function getActiveVoiceRoomProfile(memberUserIds: string[]): RoomTasteProfile {
+  const baseline = baselineService.getBaseline();
+
   if (memberUserIds.length === 0) {
     // If room is empty, aggregate positive affinities from the past 30 days
     const rows = sqlite.prepare(`
@@ -408,10 +412,13 @@ export function getActiveVoiceRoomProfile(memberUserIds: string[]): RoomTastePro
       LIMIT 15
     `).all() as Array<{ target_key: string; target_type: string; total_affinity: number }>;
 
+    const userArtists = rows.filter((r) => r.target_type === 'artist').map((r) => r.target_key);
+    const userGenres = rows.filter((r) => r.target_type === 'genre').map((r) => r.target_key);
+
     return {
-      topLikedArtists: rows.filter((r) => r.target_type === 'artist').map((r) => r.target_key),
+      topLikedArtists: userArtists.length > 0 ? userArtists : [...baseline.artists],
       topLikedSongs: rows.filter((r) => r.target_type === 'song').map((r) => r.target_key),
-      topLikedGenres: rows.filter((r) => r.target_type === 'genre').map((r) => r.target_key),
+      topLikedGenres: userGenres.length > 0 ? userGenres : [...baseline.genres],
       dislikedArtists: [],
       memberCount: 0,
     };
@@ -434,24 +441,39 @@ export function getActiveVoiceRoomProfile(memberUserIds: string[]): RoomTastePro
     total_dislikes: number;
   }>;
 
-  const topLikedArtists = rows
+  let topLikedArtists = rows
     .filter((r) => r.target_type === 'artist' && r.score > 0)
     .slice(0, 8)
     .map((r) => r.target_key);
 
-  const topLikedSongs = rows
+  let topLikedSongs = rows
     .filter((r) => r.target_type === 'song' && r.score > 0)
     .slice(0, 8)
     .map((r) => r.target_key);
 
-  const topLikedGenres = rows
+  let topLikedGenres = rows
     .filter((r) => r.target_type === 'genre' && r.score > 0)
     .slice(0, 8)
     .map((r) => r.target_key);
 
   const dislikedArtists = rows
     .filter((r) => r.target_type === 'artist' && (r.score < -2 || r.total_dislikes > 0))
-    .map((r) => r.target_key);
+    .map((r) => r.target_key.toLowerCase());
+
+  // Low-weight baseline scaffold: if active users have 0 liked artists, inject baseline artists (excluding disliked ones)
+  if (topLikedArtists.length === 0) {
+    topLikedArtists = baseline.artists.filter((a) => !dislikedArtists.includes(a.toLowerCase()));
+  } else if (topLikedArtists.length < 3) {
+    // Sparse taste: blend in 1 or 2 baseline artists so user isn't looped on a single artist
+    const extra = baseline.artists
+      .filter((a) => !dislikedArtists.includes(a.toLowerCase()) && !topLikedArtists.map((x) => x.toLowerCase()).includes(a.toLowerCase()))
+      .slice(0, 3 - topLikedArtists.length);
+    topLikedArtists = [...topLikedArtists, ...extra];
+  }
+
+  if (topLikedGenres.length === 0) {
+    topLikedGenres = [...baseline.genres];
+  }
 
   return {
     topLikedArtists,

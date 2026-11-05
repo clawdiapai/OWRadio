@@ -36,6 +36,7 @@ import { normalizeArtist, normalizeTrackTitle, getTrackDedupeKey } from '../util
 import tasteRadarChart from '../services/tasteRadarChart.js';
 import dynamicSettings from '../services/dynamicSettings.js';
 import vetoService from '../services/vetoService.js';
+import baselineService from '../services/baselineService.js';
 import { sqlite, getBotState } from '../db/index.js';
 import { executeAutoResume } from '../bot/autoResume.js';
 
@@ -545,6 +546,62 @@ export function createWebServer(player: GuildPlayer) {
     if (!targetType || !targetKey) return c.json({ error: 'Missing targetType or targetKey' }, 400);
     sqlite.prepare('DELETE FROM user_preferences WHERE target_type = ? AND target_key = ?').run(targetType, targetKey);
     return c.json({ success: true });
+  });
+
+  // --- Station DNA / Baseline Preferences (Editable in Web Studio) ---
+  app.get('/api/baseline', (c) => {
+    return c.json({
+      success: true,
+      baseline: baselineService.getBaseline(),
+    });
+  });
+
+  app.post('/api/baseline', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const artists = Array.isArray(body.artists) ? body.artists : undefined;
+    const genres = Array.isArray(body.genres) ? body.genres : undefined;
+    const weight = typeof body.weight === 'number' ? body.weight : undefined;
+
+    if (!artists && !genres && weight === undefined) {
+      return c.json({ error: 'No baseline fields provided' }, 400);
+    }
+
+    const current = baselineService.getBaseline();
+    const updated = baselineService.setBaseline(
+      artists || current.artists,
+      genres || current.genres,
+      weight !== undefined ? weight : current.weight
+    );
+
+    return c.json({ success: true, baseline: updated });
+  });
+
+  app.post('/api/baseline/artist/add', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if (!body.artist) return c.json({ error: 'Missing artist name' }, 400);
+    const updated = baselineService.addArtist(String(body.artist));
+    return c.json({ success: true, baseline: updated });
+  });
+
+  app.post('/api/baseline/artist/remove', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if (!body.artist) return c.json({ error: 'Missing artist name' }, 400);
+    const updated = baselineService.removeArtist(String(body.artist));
+    return c.json({ success: true, baseline: updated });
+  });
+
+  app.post('/api/baseline/genre/add', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if (!body.genre) return c.json({ error: 'Missing genre' }, 400);
+    const updated = baselineService.addGenre(String(body.genre));
+    return c.json({ success: true, baseline: updated });
+  });
+
+  app.post('/api/baseline/genre/remove', requireAdminAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if (!body.genre) return c.json({ error: 'Missing genre' }, 400);
+    const updated = baselineService.removeGenre(String(body.genre));
+    return c.json({ success: true, baseline: updated });
   });
   // --- Queue Admin Controls (Clear & Remove) ---
   app.post('/api/queue/clear', requireAdminAuth, (c) => {

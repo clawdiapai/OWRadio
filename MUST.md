@@ -36,9 +36,9 @@
 
 ## 3. Curation, Quality & Language Guardrails
 
-- [x] **95% English Discovery:** At least 95% of all auto-curated music must be in the English language.
+- [x] **99.9% English Discovery & 24-Hour Global Foreign Cooldown:** Maximum 1 rare foreign song per 24 hours (1,440 min) across the entire station. Back-to-back foreign songs are strictly prohibited.
+- [x] **Station DNA / Baseline Preferences (Editable in Web Studio):** Foundational seed scaffold (default artists: *Dua Lipa, Eminem, Metallica, Placebo, Muse, Ed Sheeran*; genres: *hip hop, pop, alt rock*) with mild 0.5 weight. Over time, user `/play` requests, likes, and dislikes naturally steer and overwrite this baseline.
 - [x] **Lyrics-First NLP Language Classifier:** Language detection must prioritize actual song lyrics via LRCLIB + character trigrams/stopwords, backed by Last.fm crowdsourced tags and orthography heuristics (no naive title-only guesses).
-- [x] **120-Minute Foreign Language Cooldown:** When a foreign track plays (the allowed 5%), enforce a strict 120-minute cooldown preventing consecutive or repeated tracks in that same foreign language.
 - [x] **Strict Playback Cooldowns:**
   - **48-Hour Song Cooldown:** Never repeat the same track within 48 hours.
   - **2-Hour Artist Cooldown:** Never repeat the same artist within 2 hours.

@@ -764,13 +764,16 @@ function formatCountdown(remainingSec) {
 
 function switchBrainSubTab(tab) {
   currentBrainSubTab = tab;
-  const tabs = ['llm', 'pref', 'cooldown', 'vetoes', 'room'];
+  const tabs = ['llm', 'pref', 'cooldown', 'vetoes', 'room', 'baseline'];
   tabs.forEach((t) => {
     const btn = document.getElementById(`brain-tab-${t}`);
     const sec = document.getElementById(`brain-section-${t}`);
     if (btn) btn.classList.toggle('active', t === tab);
     if (sec) sec.style.display = t === tab ? 'block' : 'none';
   });
+  if (tab === 'baseline') {
+    loadBaselineData();
+  }
 }
 
 async function fetchBrainData() {
@@ -1218,6 +1221,190 @@ function renderRoomTaste() {
         </div>
       `;
     }
+  }
+}
+
+// --- Station DNA / Baseline Preferences ---
+let currentBaselineData = null;
+
+async function loadBaselineData() {
+  try {
+    const res = await fetch('/api/baseline');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.success && data.baseline) {
+      currentBaselineData = data.baseline;
+      renderBaselineChips(data.baseline);
+    }
+  } catch (err) {
+    console.warn('[Baseline] Load error:', err);
+  }
+}
+
+function renderBaselineChips(baseline) {
+  const artistsContainer = document.getElementById('baseline-artists-chips');
+  const genresContainer = document.getElementById('baseline-genres-chips');
+  const artistsCount = document.getElementById('baseline-artists-count');
+  const genresCount = document.getElementById('baseline-genres-count');
+  const weightSlider = document.getElementById('baseline-weight-slider');
+  const weightVal = document.getElementById('baseline-weight-val');
+
+  if (artistsCount) artistsCount.innerText = `${baseline.artists.length} Artists`;
+  if (genresCount) genresCount.innerText = `${baseline.genres.length} Genres`;
+  if (weightSlider) weightSlider.value = baseline.weight;
+  if (weightVal) weightVal.innerText = Number(baseline.weight).toFixed(1);
+
+  if (artistsContainer) {
+    if (baseline.artists.length === 0) {
+      artistsContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 12px;">No baseline artists configured</span>';
+    } else {
+      artistsContainer.innerHTML = baseline.artists.map((artist) => `
+        <span class="badge-tag" style="background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); color: #c7d2fe; font-size: 12px; padding: 5px 10px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px;">
+          <span>${escapeHtml(artist)}</span>
+          <button onclick="removeBaselineArtist('${escapeJs(artist)}')" style="background: none; border: none; color: #a5b4fc; cursor: pointer; padding: 0; font-size: 13px; line-height: 1;" title="Remove artist">×</button>
+        </span>
+      `).join('');
+    }
+  }
+
+  if (genresContainer) {
+    if (baseline.genres.length === 0) {
+      genresContainer.innerHTML = '<span style="color: var(--text-muted); font-size: 12px;">No baseline genres configured</span>';
+    } else {
+      genresContainer.innerHTML = baseline.genres.map((genre) => `
+        <span class="badge-tag" style="background: rgba(236, 72, 153, 0.15); border: 1px solid rgba(236, 72, 153, 0.3); color: #fbcfe8; font-size: 12px; padding: 5px 10px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px;">
+          <span>${escapeHtml(genre)}</span>
+          <button onclick="removeBaselineGenre('${escapeJs(genre)}')" style="background: none; border: none; color: #f472b6; cursor: pointer; padding: 0; font-size: 13px; line-height: 1;" title="Remove genre">×</button>
+        </span>
+      `).join('');
+    }
+  }
+}
+
+async function addBaselineArtist() {
+  const input = document.getElementById('input-new-baseline-artist');
+  if (!input || !input.value.trim()) return;
+  const artist = input.value.trim();
+  try {
+    const res = await fetch('/api/baseline/artist/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ artist }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      input.value = '';
+      currentBaselineData = data.baseline;
+      renderBaselineChips(data.baseline);
+      showToast(`Added "${artist}" to Baseline Station DNA`, 'success');
+    } else {
+      showToast(data.error || 'Failed to add artist', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function removeBaselineArtist(artist) {
+  try {
+    const res = await fetch('/api/baseline/artist/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ artist }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      currentBaselineData = data.baseline;
+      renderBaselineChips(data.baseline);
+      showToast(`Removed "${artist}" from Baseline DNA`, 'info');
+    } else {
+      showToast(data.error || 'Failed to remove artist', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function addBaselineGenre() {
+  const input = document.getElementById('input-new-baseline-genre');
+  if (!input || !input.value.trim()) return;
+  const genre = input.value.trim().toLowerCase();
+  try {
+    const res = await fetch('/api/baseline/genre/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ genre }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      input.value = '';
+      currentBaselineData = data.baseline;
+      renderBaselineChips(data.baseline);
+      showToast(`Added genre "${genre}" to Baseline DNA`, 'success');
+    } else {
+      showToast(data.error || 'Failed to add genre', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function removeBaselineGenre(genre) {
+  try {
+    const res = await fetch('/api/baseline/genre/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ genre }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      currentBaselineData = data.baseline;
+      renderBaselineChips(data.baseline);
+      showToast(`Removed genre "${genre}" from Baseline DNA`, 'info');
+    } else {
+      showToast(data.error || 'Failed to remove genre', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function saveBaselineWeight(weight) {
+  try {
+    const res = await fetch('/api/baseline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ weight: Number(weight) }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast(`Baseline influence weight set to ${Number(weight).toFixed(1)}`, 'success');
+    }
+  } catch (err) {
+    console.warn('[Baseline] Error saving weight:', err);
+  }
+}
+
+async function resetBaselineToDefaults() {
+  if (!confirm('Reset Baseline DNA to default artists (Dua Lipa, Eminem, Metallica, Placebo, Muse, Ed Sheeran) and genres?')) return;
+  try {
+    const res = await fetch('/api/baseline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        artists: ['Dua Lipa', 'Eminem', 'Metallica', 'Placebo', 'Muse', 'Ed Sheeran'],
+        genres: ['hip hop', 'pop', 'alt rock'],
+        weight: 0.5,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      currentBaselineData = data.baseline;
+      renderBaselineChips(data.baseline);
+      showToast('Baseline DNA reset to default configuration', 'success');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
   }
 }
 
