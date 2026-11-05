@@ -11,6 +11,7 @@ import deezer, { type DeezerTrackMetadata } from './deezer.js';
 import vectorCurator from './vectorCurator.js';
 import brainLogger from './brainLogger.js';
 import dynamicSettings from './dynamicSettings.js';
+import { detectTrackLanguage } from './languageDetector.js';
 
 export const TARGET_CATALOG_SIZE = 50_000;
 const VECTOR_DIM = 384;
@@ -57,6 +58,29 @@ export class TasteRadar {
           updated_at INTEGER NOT NULL
         );
       `);
+
+      // One-time purge of accidentally mined brass band / txaranga noise
+      const junkArtists = [
+        'New Tocados', 'Banda Lous Faïences', 'Harmonie de Rion',
+        'Los Bombanceros', 'Txaranga Lagunak', 'Charanga Cubalibre',
+        'Union Musicale Samadetoise', 'Artistas del Gremio', 'BANDA les BIBERONS',
+        'Txaranga Malatxo', 'Txaranga Mutil Gazteak', "El Pafin'Hot Band",
+        'Les Incognitos', 'Banda Los Gatchos', 'Banda Los Divinos',
+        'Peña Los Chocarreros', 'Peña Los Arsouillos', 'Los Calientes',
+        'Amparanoia', 'Komando Komare'
+      ];
+      const placeholders = junkArtists.map(() => '?').join(',');
+      try {
+        sqlite.prepare(`
+          DELETE FROM song_embeddings WHERE song_id IN (
+            SELECT id FROM songs WHERE artist IN (${placeholders})
+          )
+        `).run(...junkArtists);
+        const res = sqlite.prepare(`DELETE FROM songs WHERE artist IN (${placeholders})`).run(...junkArtists);
+        if (res.changes > 0) {
+          console.log(`[TasteRadar] 🧹 Purged ${res.changes} unintended brass band tracks from catalog.`);
+        }
+      } catch {}
     } catch (err) {
       console.warn('[TasteRadar] Error ensuring tables:', (err as Error).message);
     }
@@ -207,15 +231,17 @@ export class TasteRadar {
 
       console.log(`[TasteRadar] 🛰️ Probing taste graph for seed artist: "${seed.name}" (affinity: ${seed.affinityScore.toFixed(1)})...`);
 
-      // Step 2: Query Deezer for Artist & Related Artists Graph Walk
-      const searchRes = await deezer.searchTracks(`artist:"${seed.name}"`, 1);
-      const seedArtistId = searchRes[0]?.artistId;
+      // Step 2: Query Deezer for Artist via dedicated searchArtist (exact match)
+      const artistMeta = await deezer.searchArtist(seed.name);
+      const seedArtistId = artistMeta?.id;
       if (!seedArtistId) {
         return { mined: 0, total: stats.totalSongs, seedArtist: seed.name };
       }
 
       const relatedArtists = await deezer.getRelatedArtists(seedArtistId, 12);
-      const artistsToExplore = [{ id: seedArtistId, name: seed.name }, ...relatedArtists];
+      // Filter out low-fan / fringe artists (< 3,000 fans) to prevent local village brass bands or amateur noise
+      const qualityRelated = relatedArtists.filter((a) => (a.nbFan ?? 5000) >= 3000);
+      const artistsToExplore = [{ id: seedArtistId, name: artistMeta.name }, ...qualityRelated];
 
       // Shuffle to promote diverse exploration
       for (let i = artistsToExplore.length - 1; i > 0; i--) {
@@ -251,14 +277,20 @@ export class TasteRadar {
         return { mined: 0, total: stats.totalSongs, seedArtist: seed.name };
       }
 
-      // Step 4: Filter out tracks already in SQLite songs table
-      const newTracks: DeezerTrackMetadata[] = [];
+      // Step 4: Filter out tracks already in SQLite songs table & enforce language purity
+      const newTracks: Array<DeezerTrackMetadata & { detectedLanguage: string }> = [];
       const checkStmt = sqlite.prepare('SELECT 1 FROM songs WHERE id = ? OR (LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?)) LIMIT 1');
 
       for (const track of candidateTracks) {
+        // Enforce 95% English purity: skip tracks detected as non-English
+        const lang = detectTrackLanguage(track.title, track.artist);
+        if (lang !== 'en') {
+          continue; // Discard foreign language deep-cuts from being harvested
+        }
+
         const exists = checkStmt.get(track.id, track.title, track.artist);
         if (!exists) {
-          newTracks.push(track);
+          newTracks.push({ ...track, detectedLanguage: 'en' });
         }
         if (newTracks.length >= batchTarget) break;
       }
@@ -307,8 +339,8 @@ export class TasteRadar {
       // Step 6: Atomic SQLite Transaction Insert into songs & song_embeddings
       const now = Math.floor(Date.now() / 1000);
       const insertSongStmt = sqlite.prepare(`
-        INSERT OR IGNORE INTO songs (id, deezer_id, title, artist, album, duration_sec, artwork_url, artwork_thumb_url, release_year, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO songs (id, deezer_id, title, artist, album, duration_sec, artwork_url, artwork_thumb_url, release_year, created_at, detected_language)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const insertVectorStmt = sqlite.prepare(`
@@ -329,7 +361,8 @@ export class TasteRadar {
             t.artworkUrl,
             t.artworkThumbUrl,
             t.releaseYear || null,
-            now
+            now,
+            t.detectedLanguage || 'en'
           );
 
           if (embedData?.embeddings?.[i]) {

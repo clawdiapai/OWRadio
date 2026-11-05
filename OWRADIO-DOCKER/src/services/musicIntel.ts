@@ -259,8 +259,8 @@ export async function gatherLiveMusicIntel(
   if (keyArtists.length > 0) {
     const primaryArtist = keyArtists[0];
     try {
-      const searchRes = await deezer.searchTracks(`artist:"${primaryArtist}"`, 1);
-      const artistId = searchRes[0]?.artistId;
+      const artistMeta = await deezer.searchArtist(primaryArtist);
+      const artistId = artistMeta?.id;
       if (artistId) {
         const related = await deezer.getRelatedArtists(artistId, 5);
         for (const r of related) {

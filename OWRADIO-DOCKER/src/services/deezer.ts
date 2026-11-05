@@ -251,13 +251,14 @@ export async function getArtistAlbums(artistId: string | number, limit = 20): Pr
 /**
  * Retrieve related artists for dynamic taste walks.
  */
-export async function getRelatedArtists(artistId: string | number, limit = 20): Promise<Array<{ id: string; name: string }>> {
+export async function getRelatedArtists(artistId: string | number, limit = 20): Promise<Array<{ id: string; name: string; nbFan?: number }>> {
   const cleanId = cleanDeezerId(artistId);
   const data = await deezerGet<{ data: any[] }>(`/artist/${cleanId}/related?limit=${limit}`);
   if (!data?.data) return [];
   return data.data.map((a: any) => ({
     id: String(a.id),
     name: a.name,
+    nbFan: typeof a.nb_fan === 'number' ? a.nb_fan : undefined,
   }));
 }
 
