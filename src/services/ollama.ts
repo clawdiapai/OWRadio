@@ -37,16 +37,26 @@ export interface EnrichedMetadata {
   tags: string[];
 }
 
+let _ollamaCircuitBreakerUntil = 0;
+let _ollamaConsecutiveErrors = 0;
+
 /**
- * Execute a structured JSON request against Ollama with strict timeout, thread clamping, and observability logging.
+ * Execute a structured JSON request against Ollama with strict timeout, thread clamping, circuit breaker, and observability logging.
  */
 async function callOllama<T>(
   prompt: string,
-  timeoutMs = 40000,
-  options: Record<string, any> = { num_thread: 3, num_predict: 200, temperature: 0.7 },
+  timeoutMs = 5000,
+  options: Record<string, any> = { num_thread: 2, num_predict: 200, temperature: 0.7 },
   action: 'curation' | 'vibe' | 'enrichment' | 'custom' = 'curation',
   metadata?: Record<string, any>
 ): Promise<T | null> {
+  // Fast fail if circuit breaker is open (Ollama offline/unreachable)
+  if (Date.now() < _ollamaCircuitBreakerUntil) {
+    return null;
+  }
+
+  // Hard clamp on timeout to prevent freezing event loop or queue delays
+  const effectiveTimeout = Math.min(timeoutMs, 5000);
   const url = `${config.OLLAMA_URL}/api/generate`;
   const t0 = performance.now();
   const timestamp = Math.floor(Date.now() / 1000);
@@ -62,13 +72,18 @@ async function callOllama<T>(
         format: 'json',
         options,
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(effectiveTimeout),
     });
 
     const durationMs = Math.round(performance.now() - t0);
 
     if (!response.ok) {
       console.warn(`[Ollama] HTTP error ${response.status} from ${url}`);
+      _ollamaConsecutiveErrors++;
+      if (_ollamaConsecutiveErrors >= 2) {
+        _ollamaCircuitBreakerUntil = Date.now() + 180000;
+        console.warn(`[Ollama] Circuit breaker active. Ollama returned HTTP errors; pausing queries for 3m.`);
+      }
       brainLogger.logInteraction({
         timestamp,
         model: config.OLLAMA_MODEL,
@@ -96,6 +111,10 @@ async function callOllama<T>(
       });
       return null;
     }
+
+    // Success - reset breaker
+    _ollamaConsecutiveErrors = 0;
+    _ollamaCircuitBreakerUntil = 0;
 
     const rawResponse = data.response;
 
@@ -164,7 +183,13 @@ async function callOllama<T>(
       (err as Error).message.toLowerCase().includes('timeout') ||
       (err as Error).message.toLowerCase().includes('aborted');
 
-    console.warn(`[Ollama] Model query failed or timed out (${timeoutMs}ms):`, (err as Error).message);
+    _ollamaConsecutiveErrors++;
+    if (_ollamaConsecutiveErrors >= 2) {
+      _ollamaCircuitBreakerUntil = Date.now() + 180000;
+      console.warn(`[Ollama] Circuit breaker active (2 consecutive errors/timeouts). Ollama appears offline; pausing LLM queries for 3m.`);
+    }
+
+    console.warn(`[Ollama] Model query failed or timed out (${effectiveTimeout}ms):`, (err as Error).message);
 
     brainLogger.logInteraction({
       timestamp,
@@ -174,7 +199,7 @@ async function callOllama<T>(
       response: null,
       durationMs,
       status: isTimeout ? 'timeout' : 'error',
-      metadata: { ...metadata, error: (err as Error).message, timeoutMs, options },
+      metadata: { ...metadata, error: (err as Error).message, timeoutMs: effectiveTimeout, options },
     });
     return null;
   }
@@ -264,8 +289,8 @@ Return ONLY JSON:
 
   const result = await callOllama<{ recommendations?: CurationRecommendation[] }>(
     prompt,
-    40000,
-    { num_thread: 3, num_predict: 380, temperature: 0.7 },
+    3500,
+    { num_thread: 2, num_predict: 250, temperature: 0.7 },
     'curation',
     {
       activeListeners: context.activeMembersCount,
@@ -311,7 +336,7 @@ CRITICAL DIVERSITY & DEDUPLICATION RULES:
 
   const result = await callOllama<{ playlist?: VibeItem[] }>(
     prompt,
-    25000,
+    4000,
     { num_thread: 2, num_predict: 260, temperature: 0.7 },
     'vibe',
     { vibePrompt: userPrompt, targetCount: count }
@@ -360,7 +385,7 @@ Output ONLY JSON:
 
   return callOllama<EnrichedMetadata>(
     prompt,
-    10000,
+    3000,
     { num_thread: 2, num_predict: 80, temperature: 0.4 },
     'enrichment',
     { title, artist, album }

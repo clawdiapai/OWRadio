@@ -242,16 +242,6 @@ export async function resolveStream(
 
   const cookiesPath = config.YOUTUBE_COOKIES_PATH || (existsSync(path.resolve(process.cwd(), 'cookies.txt')) ? path.resolve(process.cwd(), 'cookies.txt') : undefined);
 
-  // When cookies are not available on cloud datacenter IPs, YouTube aggressively blocks requests.
-  // Prioritize SoundCloud (100% unblocked full-length audio without bot challenges)
-  if (!cookiesPath) {
-    const scStream = await resolveSoundCloudStream(track);
-    if (scStream) {
-      console.log(`[StreamResolver] Resolved "${track.title}" via SoundCloud (cloud unblocked stream): ${scStream.streamUrl}`);
-      return scStream;
-    }
-  }
-
   // --- Step 3: YouTube Search via yt-dlp ---
   const searchQuery = `ytsearch5:${track.artist} - ${track.title} official audio`;
   const baseArgs = [
@@ -260,6 +250,7 @@ export async function resolveStream(
     '--no-warnings',
     '--no-check-certificates',
     '--default-search', 'ytsearch',
+    '--extractor-args', 'youtube:player_client=web,android,ios',
     '--js-runtimes', 'node',
   ];
 
@@ -295,6 +286,33 @@ export async function resolveStream(
     }
   } catch (err) {
     console.warn(`[StreamResolver] yt-dlp YouTube search failed for "${searchQuery}":`, (err as Error).message);
+  }
+
+  // If initial official search found nothing, try direct Topic query before giving up on YouTube
+  if (candidates.length === 0) {
+    try {
+      const topicQuery = `ytsearch3:${track.artist} - ${track.title} Topic`;
+      const { stdout } = await execFileAsync('yt-dlp', [...baseArgs, topicQuery], {
+        timeout: 8000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const item = JSON.parse(line);
+          if (item.id) {
+            candidates.push({
+              id: item.id,
+              title: item.title || '',
+              duration: item.duration,
+              uploader: item.uploader || '',
+            });
+          }
+        } catch {}
+      }
+    } catch (err) {
+      console.warn(`[StreamResolver] YouTube Topic search fallback failed for "${track.title}":`, (err as Error).message);
+    }
   }
 
   // --- Step 4: Pick Best YouTube Candidate ---
@@ -563,22 +581,11 @@ export async function resolveFallbackStream(
     }
   }
 
-  // Fallback 1: SoundCloud search (full-length audio, resilient on datacenter/cloud IPs)
-  try {
-    const scStream = await resolveSoundCloudStream(track);
-    if (scStream) {
-      console.log(`[StreamResolver] Resolved resilient SoundCloud fallback for "${track.title}": ${scStream.streamUrl}`);
-      return scStream;
-    }
-  } catch (scErr) {
-    console.warn('[StreamResolver] SoundCloud fallback search failed:', (scErr as Error).message);
-  }
-
-  // Fallback 2: Alternative YouTube candidate search (strictly excluding all failed video IDs)
+  // Fallback 1: Alternative YouTube candidate search (strictly excluding all failed video IDs)
   try {
     const query = track.artist && track.artist !== 'Unknown Artist'
-      ? `${track.artist} - ${track.title} audio`
-      : `${track.title} audio`;
+      ? `${track.artist} - ${track.title} Topic`
+      : `${track.title} official`;
     const ytCandidates = await youtubeService.searchTracks(query, 5);
     const altCandidate = ytCandidates.find((c) => !failingYtIds.has(c.videoId));
     if (altCandidate) {
@@ -595,40 +602,21 @@ export async function resolveFallbackStream(
     console.warn('[StreamResolver] Alternative YouTube candidate search failed:', (err as Error).message);
   }
 
-  // Fallback 3: Deezer CDN preview (guaranteed Akamai CDN delivery, but 30s preview)
-  let previewUrl = track.previewUrl;
-  const cleanId = track.id.replace(/^(dz_|yt_)/, '');
-  if (/^\d+$/.test(cleanId)) {
-    try {
-      const freshMeta = await deezerService.getTrack(cleanId);
-      if (freshMeta?.previewUrl) {
-        previewUrl = freshMeta.previewUrl;
-      }
-    } catch {}
+  // Fallback 2: SoundCloud search (full-length audio, resilient on datacenter/cloud IPs)
+  try {
+    const scStream = await resolveSoundCloudStream(track);
+    if (scStream) {
+      console.log(`[StreamResolver] Resolved resilient SoundCloud fallback for "${track.title}": ${scStream.streamUrl}`);
+      return scStream;
+    }
+  } catch (scErr) {
+    console.warn('[StreamResolver] SoundCloud fallback search failed:', (scErr as Error).message);
   }
 
-  if (!previewUrl) {
-    try {
-      const query = track.artist && track.artist !== 'Unknown Artist' ? `${track.artist} ${track.title}` : track.title;
-      const dzResults = await deezerService.searchTracks(query, 1);
-      if (dzResults.length > 0 && dzResults[0].previewUrl) {
-        previewUrl = dzResults[0].previewUrl;
-      }
-    } catch {}
-  }
-
-  if (previewUrl) {
-    console.warn(`[StreamResolver] Fallback to Deezer CDN 30s preview for "${track.title}" (WARNING: 30s preview)`);
-    return {
-      songId: track.id,
-      youtubeId: 'dz_preview',
-      streamUrl: previewUrl,
-      durationSec: 30,
-      source: 'deezer',
-    };
-  }
-
-  console.error(`[StreamResolver] All fallback streams exhausted for "${track.title}"`);
+  // Notice: Deezer 30s preview fallback intentionally omitted.
+  // In full-track radio mode, truncated 30s snippets cut songs off abruptly.
+  // Returning null allows GuildPlayer to cleanly advance to the next full-length track.
+  console.warn(`[StreamResolver] All full-length streams exhausted for "${track.title}". Skipping track.`);
   return null;
 }
 
