@@ -1,3 +1,4 @@
+import config from '../../config.js';
 /**
  * @file features.ts
  * @description Advanced Discord Slash Commands for VEXO:
@@ -205,10 +206,16 @@ async function ensureVoiceConnection(
   player: GuildPlayer
 ): Promise<boolean> {
   const member = interaction.member as GuildMember;
-  const channel = member?.voice?.channel;
+  let channel = member?.voice?.channel;
 
   if (!channel) {
-    await interaction.editReply('❌ You must be inside a voice channel to use this command!');
+    const defaultId = config.DEFAULT_VOICE_CHANNEL_ID || '1063852037315514469';
+    channel = (interaction.guild?.channels.cache.get(defaultId) ||
+      (await interaction.client.channels.fetch(defaultId).catch(() => null))) as any;
+  }
+
+  if (!channel) {
+    await interaction.editReply('❌ Could not find a voice channel to join. Please join a voice channel or ensure default channel permissions!');
     return false;
   }
 

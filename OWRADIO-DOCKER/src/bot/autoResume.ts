@@ -68,12 +68,23 @@ export async function resolveAutoResumeChannel(
     }
   }
 
-  // 2. Check saved channel or pinned voice channel override from settings
+  // 2. Check designated default channel (defaults to 1063852037315514469)
+  const designatedDefaultId = config.DEFAULT_VOICE_CHANNEL_ID || '1063852037315514469';
   const pinnedChannelId = dynamicSettings.getString('discord_pinned_voice_channel_id', '');
-  const savedChannelId = pinnedChannelId || getBotState('last_voice_channel_id') || config.DEFAULT_VOICE_CHANNEL_ID;
+  const savedChannelId = pinnedChannelId || designatedDefaultId || getBotState('last_voice_channel_id');
+
+  // Find or fetch default channel
+  let defaultChannel: VoiceBasedChannel | null = voiceChannels.find((c) => c.id === designatedDefaultId) || null;
+  if (!defaultChannel) {
+    const fetched = await client.channels.fetch(designatedDefaultId).catch(() => null);
+    if (fetched && fetched.isVoiceBased()) {
+      defaultChannel = fetched as VoiceBasedChannel;
+    }
+  }
+
   let savedChannel: VoiceBasedChannel | null = null;
   if (savedChannelId) {
-    savedChannel = voiceChannels.find((c) => c.id === savedChannelId) || null;
+    savedChannel = voiceChannels.find((c) => c.id === savedChannelId) || defaultChannel;
   }
 
   // Decision Logic:
@@ -83,6 +94,15 @@ export async function resolveAutoResumeChannel(
       guild: primaryGuild,
       channel: bestPopulatedChannel,
       isPopulated: true,
+    };
+  }
+
+  // When not known where (or default channel designated), prioritize 1063852037315514469
+  if (defaultChannel) {
+    return {
+      guild: primaryGuild,
+      channel: defaultChannel,
+      isPopulated: false,
     };
   }
 

@@ -1,3 +1,4 @@
+import config from '../../config.js';
 /**
  * @file play.ts
  * @description Streamlined Slash command handlers for /play and /vibe.
@@ -56,10 +57,17 @@ async function ensureVoiceConnection(
   player: GuildPlayer
 ): Promise<boolean> {
   const member = interaction.member as GuildMember;
-  const targetChannel = member?.voice?.channel;
+  let targetChannel = member?.voice?.channel;
 
   if (!targetChannel) {
-    await interaction.editReply('❌ You must be inside a voice channel to use this command!');
+    // Default to configured channel 1063852037315514469 when user is not in voice!
+    const defaultId = config.DEFAULT_VOICE_CHANNEL_ID || '1063852037315514469';
+    targetChannel = (interaction.guild?.channels.cache.get(defaultId) ||
+      (await interaction.client.channels.fetch(defaultId).catch(() => null))) as any;
+  }
+
+  if (!targetChannel) {
+    await interaction.editReply('❌ Could not find a voice channel to join. Please join a voice channel or ensure default channel permissions!');
     return false;
   }
 

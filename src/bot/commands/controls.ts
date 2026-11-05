@@ -1,3 +1,4 @@
+import config from '../../config.js';
 /**
  * @file controls.ts
  * @description Discord slash commands for player controls:
@@ -151,9 +152,15 @@ export async function handleJoin(
   player: GuildPlayer
 ): Promise<void> {
   const member = interaction.member as GuildMember;
-  const targetChannel = member?.voice?.channel;
+  let targetChannel = member?.voice?.channel;
   if (!targetChannel) {
-    await interaction.reply({ content: '❌ You must be inside a voice channel to use /join!', ephemeral: true });
+    // Default to configured channel 1063852037315514469 when user does not specify or is not in voice!
+    const defaultId = config.DEFAULT_VOICE_CHANNEL_ID || '1063852037315514469';
+    targetChannel = (interaction.guild?.channels.cache.get(defaultId) ||
+      (await interaction.client.channels.fetch(defaultId).catch(() => null))) as any;
+  }
+  if (!targetChannel) {
+    await interaction.reply({ content: '❌ Could not find a voice channel to join. Please join a voice channel or ensure the default channel exists!', ephemeral: true });
     return;
   }
 

@@ -81,7 +81,7 @@ const envSchema = z.object({
   AUTO_RESUME: z.coerce.boolean().default(true),
 
   /** Optional default voice channel ID to join on auto-resume if no previous state exists */
-  DEFAULT_VOICE_CHANNEL_ID: z.string().optional(),
+  DEFAULT_VOICE_CHANNEL_ID: z.string().default('1063852037315514469'),
 
   /** Delay in seconds after Discord gateway ready before initiating auto-resume (default: 2) */
   AUTO_RESUME_DELAY_SEC: z.coerce.number().default(2),
