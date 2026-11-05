@@ -1153,15 +1153,16 @@ export async function handleVeto(
   player: GuildPlayer
 ): Promise<void> {
   const name = interaction.options.getString('name', true).trim();
-  const type = (interaction.options.getString('type') || 'artist') as 'artist' | 'track';
+  const rawType = interaction.options.getString('type') || 'artist';
+  const type: 'artist' | 'song' = rawType === 'track' || rawType === 'song' ? 'song' : 'artist';
 
-  const veto = vetoService.addVeto(type, name, `Blacklisted via /veto by ${interaction.user.tag}`);
+  vetoService.addVeto(type, name, 'manual_admin');
 
   // If vetoed artist or track matches currently playing, skip it
   if (player.currentTrack) {
     if (
       (type === 'artist' && vetoService.isArtistVetoed(player.currentTrack.artist)) ||
-      (type === 'track' && vetoService.isTrackVetoed(player.currentTrack.title, player.currentTrack.artist))
+      (type === 'song' && vetoService.isSongVetoed(player.currentTrack.title, player.currentTrack.artist))
     ) {
       await player.skip();
     }
@@ -1171,7 +1172,7 @@ export async function handleVeto(
   await player.recurateAutoplayBuffer();
 
   await interaction.reply({
-    content: `🚫 **Vetoed ${type}:** "${veto.displayName}". It has been blacklisted and purged from upcoming curation.`,
+    content: `🚫 **Vetoed ${type}:** "${name}". It has been blacklisted and purged from upcoming curation.`,
     ephemeral: true,
   });
 }

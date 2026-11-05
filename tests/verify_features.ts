@@ -68,8 +68,8 @@ console.log(`Vault stats: ${vaultStats.count} tracks, ${vaultStats.formattedSize
 console.log('✅ Audio vault verified!');
 
 console.log('=== 6. Verifying Discord Feature Slash Commands ===');
-const { artistCommand, tasteCommand, throwbackCommand, radioCommand, morphCommand, vaultCommand } = await import('../src/bot/commands/features.js');
-const cmds = [artistCommand, tasteCommand, throwbackCommand, radioCommand, morphCommand, vaultCommand];
+const { artistCommand, tasteCommand, throwbackCommand, radioCommand, morphCommand, vetoCommand } = await import('../src/bot/commands/features.js');
+const cmds = [artistCommand, tasteCommand, throwbackCommand, radioCommand, morphCommand, vetoCommand];
 for (const cmd of cmds) {
   const json = cmd.toJSON();
   if (!json.name || !json.description) {

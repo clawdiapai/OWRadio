@@ -567,15 +567,17 @@ async function getDynamicFallbackTrack(
         const vintageThemes = [
           { query: '70s classic rock hits', name: '70s Classic Rock' },
           { query: '70s soul funk classics', name: '70s Soul & Funk' },
-          { query: '80s new wave hits', name: '80s New Wave' },
+          { query: '80s new wave synthpop', name: '80s Synthpop & New Wave' },
           { query: '80s classic pop anthems', name: '80s Pop Vault' },
           { query: '90s alternative rock', name: '90s Alternative' },
           { query: '90s grunge classics', name: '90s Grunge' },
+          { query: '90s trip hop chill', name: '90s Trip Hop' },
           { query: '2000s indie rock', name: '2000s Indie' },
-          { query: '2000s electronic classic', name: '2000s Electronic' }
+          { query: '2000s electronic classic', name: '2000s Electronic' },
+          { query: '2010s indie pop hits', name: '2010s Indie Pop' },
         ];
         const theme = vintageThemes[Math.floor(Math.random() * vintageThemes.length)];
-        candidates = await deezer.searchTracks(theme.query, 40);
+        candidates = await deezer.searchTracksRandomized(theme.query, 40, 200);
         reason = `Dynamic vintage vault (${theme.name})`;
       }
     }
@@ -594,7 +596,7 @@ async function getDynamicFallbackTrack(
     console.warn('[Curator] Dynamic roulette fallback error:', (err as Error).message);
   }
 
-  // Last resort: chart search
+  // Last resort Deezer charts
   const englishGenreChartIds = [132, 152, 116, 165, 85]; // Pop, Rock, Rap, R&B, Alternative
   const selectedGenre = englishGenreChartIds[Math.floor(Math.random() * englishGenreChartIds.length)];
   const charts = await deezer.getRandomChartTracks(selectedGenre, 50);
@@ -607,6 +609,42 @@ async function getDynamicFallbackTrack(
         curationReason: 'General eclectic discovery',
       };
     }
+  }
+
+  // --- Tier 4: Local SQLite Catalog Safety Net (Anti-Fatigue Bucket) ---
+  try {
+    const localCandidates = sqlite.prepare(`
+      SELECT s.*,
+        (SELECT COUNT(*) FROM playback_history h WHERE h.song_id = s.id) as play_count,
+        (SELECT MAX(played_at) FROM playback_history h WHERE h.song_id = s.id) as last_played
+      FROM songs s
+      ORDER BY play_count ASC, last_played ASC, RANDOM()
+      LIMIT 50
+    `).all() as any[];
+
+    for (const row of localCandidates) {
+      if (isTrackEligibleForAutoplay(row.id, row.artist, queuedSongIds, queuedArtists, row.title, queuedDedupeKeys, row.duration_sec, queuedLanguages)) {
+        const metadata: DeezerTrackMetadata = {
+          id: row.id,
+          deezerId: row.deezer_id || row.id.replace(/^dz_/, ''),
+          title: row.title,
+          artist: row.artist,
+          album: row.album || undefined,
+          durationSec: row.duration_sec || 180,
+          artworkUrl: row.artwork_url || '',
+          artworkThumbUrl: row.artwork_thumb_url || '',
+          genre: row.genre || undefined,
+          releaseYear: row.release_year || undefined,
+        };
+        return {
+          track: metadata,
+          curatedBy: 'Dynamic Taste Deep-Cut',
+          curationReason: row.play_count === 0 ? 'Local Catalog: Unplayed Deep Discovery' : 'Local Catalog: Anti-Fatigue Vault Selection',
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[Curator] Local catalog fallback error:', (err as Error).message);
   }
 
   return null;
@@ -691,17 +729,20 @@ export async function getNextAutoplayTracks(
   }  // --- Tier 1: Curation Pipeline based on active Engine (hybrid / embedding / jev / llm) ---
   if (currentEngine === 'hybrid') {
     // Primary Hybrid Mode: 20/50/30 Degrees of Separation Collaborative Graph (Last.fm + Deezer)
-    while (results.length < count) {
+    let hybridAttempts = 0;
+    while (results.length < count && hybridAttempts < 8) {
+      hybridAttempts++;
       const collTrack = await getDynamicFallbackTrack(roomProfile, queuedSongIds, queuedArtists, queuedDedupeKeys, queuedLanguages);
-      if (!collTrack) break;
-      queuedSongIds.add(collTrack.track.id);
-      queuedArtists.add(collTrack.track.artist.toLowerCase());
-      const normA = normalizeArtist(collTrack.track.artist).replace(/\s+/g, '');
-      if (normA) queuedArtists.add(normA);
-      queuedDedupeKeys.add(getTrackDedupeKey(collTrack.track.title, collTrack.track.artist));
-      const lang = detectTrackLanguage(collTrack.track.title, collTrack.track.artist, undefined, collTrack.track.isrc, collTrack.track.id);
-      if (lang !== 'en') queuedLanguages.add(lang);
-      results.push(collTrack);
+      if (collTrack) {
+        queuedSongIds.add(collTrack.track.id);
+        queuedArtists.add(collTrack.track.artist.toLowerCase());
+        const normA = normalizeArtist(collTrack.track.artist).replace(/\s+/g, '');
+        if (normA) queuedArtists.add(normA);
+        queuedDedupeKeys.add(getTrackDedupeKey(collTrack.track.title, collTrack.track.artist));
+        const lang = detectTrackLanguage(collTrack.track.title, collTrack.track.artist, undefined, collTrack.track.isrc, collTrack.track.id);
+        if (lang !== 'en') queuedLanguages.add(lang);
+        results.push(collTrack);
+      }
     }
   } else if (currentEngine === 'embedding') {
     if (vectorCurator.getIndexedCount() >= 500) {
@@ -783,11 +824,12 @@ export async function getNextAutoplayTracks(
 
     // --- Tier 2: Dynamic Anti-Bubble Fallback ---
   // If Ollama is offline or returned insufficient verified tracks, fill remaining slots dynamically
-  while (results.length < count) {
+  let tier2Attempts = 0;
+  while (results.length < count && tier2Attempts < 8) {
+    tier2Attempts++;
     const fallbackResult = await getDynamicFallbackTrack(roomProfile, queuedSongIds, queuedArtists, queuedDedupeKeys, queuedLanguages);
     if (!fallbackResult) {
-      console.warn('[Curator] Unable to find more eligible fallback tracks without repeating');
-      break;
+      continue;
     }
     queuedSongIds.add(fallbackResult.track.id);
     queuedArtists.add(fallbackResult.track.artist.toLowerCase());
@@ -812,6 +854,48 @@ export async function getNextAutoplayTracks(
       status: 'fallback',
       metadata: { curatedBy: fallbackResult.curatedBy, trackId: fallbackResult.track.id },
     });
+  }
+
+  // --- Tier 5: Emergency Dead-Air Prevention (Progressive Softening) ---
+  if (results.length < count) {
+    console.warn('[Curator] ⚠️ Tight cooldowns detected. Activating Emergency Anti-Fatigue Vault to guarantee zero dead air.');
+    try {
+      const emergencyTracks = sqlite.prepare(`
+        SELECT s.*,
+          (SELECT COUNT(*) FROM playback_history h WHERE h.song_id = s.id) as play_count,
+          (SELECT MAX(played_at) FROM playback_history h WHERE h.song_id = s.id) as last_played
+        FROM songs s
+        ORDER BY play_count ASC, last_played ASC
+        LIMIT 10
+      `).all() as any[];
+
+      for (const row of emergencyTracks) {
+        if (results.length >= count) break;
+        if (queuedSongIds.has(row.id)) continue;
+        const normA = normalizeArtist(row.artist).replace(/\s+/g, '');
+        if (queuedArtists.has(row.artist.toLowerCase()) || (normA && queuedArtists.has(normA))) continue;
+
+        queuedSongIds.add(row.id);
+        queuedArtists.add(row.artist.toLowerCase());
+        results.push({
+          track: {
+            id: row.id,
+            deezerId: row.deezer_id || row.id.replace(/^dz_/, ''),
+            title: row.title,
+            artist: row.artist,
+            album: row.album || undefined,
+            durationSec: row.duration_sec || 180,
+            artworkUrl: row.artwork_url || '',
+            artworkThumbUrl: row.artwork_thumb_url || '',
+            releaseYear: row.release_year || undefined,
+          },
+          curatedBy: 'Dynamic Taste Deep-Cut',
+          curationReason: 'Emergency Vault: Longest-rested library track',
+        });
+      }
+    } catch (err) {
+      console.warn('[Curator] Emergency fallback error:', (err as Error).message);
+    }
   }
 
   return results;

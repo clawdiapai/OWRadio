@@ -48,9 +48,9 @@ async function main() {
     console.log(`[Bootstrap] Web Dashboard active at http://0.0.0.0:${config.WEB_PORT}/`);
   }
 
-  // 4. Start Autonomous Taste Radar (Continuous Background Catalog Expansion to 50k)
+  // 4. Start Autonomous Taste Radar (Continuous Background Catalog Expansion & Turnover)
   tasteRadar.setActiveListenersProvider(() => player.getActiveListenerUserIds());
-  // tasteRadar.start(); // Disabled in favor of dynamic 20/50/30 Open Graph curation
+  tasteRadar.start();
 
   // Graceful shutdown handling
   const shutdown = async (signal: string) => {

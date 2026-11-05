@@ -147,12 +147,25 @@ export async function searchArtist(query: string): Promise<DeezerArtistMetadata 
 }
 
 /**
- * Search Deezer catalog by freeform query.
+ * Search Deezer catalog by freeform query with optional pagination offset.
  */
-export async function searchTracks(query: string, limit = 10): Promise<DeezerTrackMetadata[]> {
-  const data = await deezerGet<{ data: any[] }>(`/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+export async function searchTracks(query: string, limit = 10, index = 0): Promise<DeezerTrackMetadata[]> {
+  const indexParam = index > 0 ? `&index=${index}` : '';
+  const data = await deezerGet<{ data: any[] }>(`/search?q=${encodeURIComponent(query)}&limit=${limit}${indexParam}`);
   if (!data?.data) return [];
   return data.data.map(normalizeTrack);
+}
+
+/**
+ * Search Deezer catalog with a randomized pagination offset to explore deep cuts.
+ */
+export async function searchTracksRandomized(
+  query: string,
+  limit = 25,
+  maxOffset = 150
+): Promise<DeezerTrackMetadata[]> {
+  const offset = Math.floor(Math.random() * maxOffset);
+  return searchTracks(query, limit, offset);
 }
 
 /**
@@ -272,6 +285,7 @@ export async function searchByYearRange(yearStart: number, yearEnd: number, genr
 export default {
   searchArtist,
   searchTracks,
+  searchTracksRandomized,
   getTrack,
   getAlbumTracks,
   searchPlaylists,

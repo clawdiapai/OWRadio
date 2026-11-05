@@ -204,6 +204,19 @@ export class GuildPlayer extends EventEmitter {
     if (this.playbackHealthWatchdogTimer) return;
 
     this.playbackHealthWatchdogTimer = setInterval(() => {
+      // Check 0: Autonomous Self-Healing Idle Recovery (Guarantees zero persistent dead air)
+      if (!this.currentTrack && this.autoplayEnabled && !this.isPaused && !this.isTransitioning && !this.isHandlingFailure && !this.isPlayingNext) {
+        this.consecutiveSilenceTicks = 0;
+        if (this.queue.length > 0) {
+          console.log('[GuildPlayer] 🩺 Watchdog: Player is idle with pending tracks in queue. Triggering playNext().');
+          void this.playNext();
+        } else if (!this.isReplenishing) {
+          console.log('[GuildPlayer] 🩺 Watchdog: Player is idle with empty queue. Triggering buffer replenishment.');
+          void this.replenishAutoplayBuffer();
+        }
+        return;
+      }
+
       // Only monitor active unpaused playback with a valid track
       if (this.isPaused || !this.currentTrack || this.isTransitioning || this.isHandlingFailure || this.isPlayingNext) {
         this.consecutiveSilenceTicks = 0;
@@ -1186,6 +1199,14 @@ export class GuildPlayer extends EventEmitter {
    */
   public async handleVoiceRoomMembershipChange(): Promise<void> {
     await this.recurateAutoplayBuffer(true);
+    // If station is currently idle with listeners present, immediately kick off playback
+    if (!this.currentTrack && this.autoplayEnabled && this.getActiveListenerUserIds().length > 0) {
+      if (this.queue.length > 0) {
+        void this.playNext();
+      } else if (!this.isReplenishing) {
+        void this.replenishAutoplayBuffer();
+      }
+    }
   }
 
   /**

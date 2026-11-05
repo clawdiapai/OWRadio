@@ -426,7 +426,7 @@ export class PlayerUiService {
   }
 
   /**
-   * Generates the high-fidelity studio HUD embed and symmetrical 2-row interactive controls.
+   * Generates the ultra-compact Discord Now Playing micro-card and single-row controls (<100px total height).
    */
   private buildUiPayload(state: PlayerStatePayload): {
     embed: EmbedBuilder;
@@ -435,40 +435,23 @@ export class PlayerUiService {
     const track = state.track!;
     const isPaused = this.player?.isPaused ?? false;
 
-    // Dynamic theme color and mode indicator
+    // Dynamic theme color
     let themeColor = 0x6366f1; // Indigo / Studio Violet
-    let modeBadge = '⚡ 24-BIT HI-FI STREAM';
-
     if (state.radioStation) {
       themeColor = 0x38bdf8; // Sky Blue
-      modeBadge = `📻 STATION • ${state.radioStation.name.toUpperCase()}`;
     } else if (state.timeCapsuleYear) {
       themeColor = 0xf59e0b; // Gold
-      modeBadge = `⏳ TIME CAPSULE • YEAR ${state.timeCapsuleYear}`;
     } else if (state.morph?.active) {
       themeColor = 0xec4899; // Magenta
-      modeBadge = `🌀 DJ MORPH • STEP ${state.morph.step}/${state.morph.totalSteps}`;
     } else if (track.curatedBy === 'AI Vibe Mix') {
       themeColor = 0xa855f7; // Purple
-      modeBadge = '✨ AI VIBE MIX';
     } else if (track.curatedBy === 'User Request' || track.isManualRequest) {
-      if (track.requestType === 'playlist') {
-        themeColor = 0x3b82f6; // Blue
-        modeBadge = track.playlistTitle ? `📋 ${track.playlistTitle.toUpperCase()}` : '📋 BLENDED PLAYLIST';
-      } else {
-        themeColor = 0x10b981; // Emerald Green
-        modeBadge = '⭐ VIP SINGLE REQUEST';
-      }
+      themeColor = track.requestType === 'playlist' ? 0x3b82f6 : 0x10b981;
     }
 
     const elapsed = track.elapsedSec || 0;
     const duration = track.durationSec || 0;
     const bar = buildProgressBar(elapsed, duration, 14);
-
-    // Format listeners
-    const listenerNames = state.roomListeners.length > 0
-      ? state.roomListeners.slice(0, 4).join(', ') + (state.roomListeners.length > 4 ? ` + ${state.roomListeners.length - 4}` : '')
-      : 'Solo Listener';
 
     // Format up next
     let upNextTag = '';
@@ -481,78 +464,32 @@ export class PlayerUiService {
     }
 
     const upNextText = state.upNext
-      ? `**${state.upNext.title}**\n*${state.upNext.artist}*${upNextTag}`
-      : '*(Dynamic Autoplay Consensus)*';
+      ? `**${state.upNext.title}** — *${state.upNext.artist}*${upNextTag}`
+      : '*(Dynamic Consensus)*';
 
     const yearStr = track.releaseYear ? ` (${track.releaseYear})` : '';
-    const albumStr = track.album ? `  •  💿 *${track.album}${yearStr}*` : (yearStr ? `  •  📅 *${yearStr}*` : '');
+    const albumStr = track.album ? ` • 💿 *${track.album}${yearStr}*` : (yearStr ? ` • 📅 *${yearStr}*` : '');
 
     const webBaseUrl = config.PUBLIC_URL || (state.streamUrl && !state.streamUrl.includes('127.0.0.1') ? state.streamUrl.replace('/stream.mp3', '') : 'https://vexo.plingindigo.org');
     const cleanWebUrl = webBaseUrl.replace(/\/+$/, '');
-    const bitrate = dynamicSettings.getNumber('audio_mp3_bitrate_kbps', 192);
 
+    // Ultra-Compact 3-Line Micro-Card (<100px)
     const embed = new EmbedBuilder()
       .setColor(themeColor)
-      .setAuthor({
-        name: `${isPaused ? '⏸️ PAUSED' : '🟢 NOW BROADCASTING'} • ${modeBadge}`,
-        iconURL: this.client?.user?.displayAvatarURL() || undefined,
-      })
-      .setTitle(`🎵 ${track.title}`)
+      .setTitle(`🎵 ${track.title} — ${track.artist}`)
       .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `https://${cleanWebUrl}`)
       .setDescription(
-        `🎤 **${track.artist}**${albumStr}\n\n` +
-        `▶ \`${formatDuration(elapsed)}\`  ${bar}  \`${formatDuration(duration)}\`  •  🔊 \`${state.volume}%\``
-      )
-      .addFields(
-        {
-          name: '⏭️ Next in Rotation',
-          value: upNextText,
-          inline: true,
-        },
-        {
-          name: '👥 Voice Room',
-          value: listenerNames,
-          inline: true,
-        }
+        `${albumStr ? `${albumStr.replace(/^\s*•\s*/, '')}\n` : ''}` +
+        `▶ \`${formatDuration(elapsed)}\`  ${bar}  \`${formatDuration(duration)}\`\n` +
+        `⏭️ *Up Next:* ${upNextText}`
       );
-
-    if (track.curationReason) {
-      embed.addFields({
-        name: '✨ Curation Vibe',
-        value: `*${track.curationReason}*`,
-        inline: false,
-      });
-    }
-
-    embed.setFooter({
-      text: `OWRadio Engine • ${bitrate} kbps Lossless PCM • Queue: ${state.queueLength} tracks`,
-    });
 
     if (track.artworkUrl) {
       embed.setThumbnail(track.artworkUrl);
     }
 
-    // Extract Active Studio Guard Filters for HUD display
-    const liveSetting = dynamicSettings.getString('curation_filter_live', 'none');
-    const coverSetting = dynamicSettings.getString('curation_filter_covers', 'none');
-    const rerecordSetting = dynamicSettings.getString('curation_filter_rerecorded', 'none');
-    const liveBadge = liveSetting === 'none' ? '🚫 No Lives' : (liveSetting === 'high_quality' ? '⭐ HQ Lives' : '📻 Any Live');
-    const coverBadge = coverSetting === 'none' ? '🚫 No Covers' : (coverSetting === 'high_quality' ? '⭐ HQ Covers' : '📻 Any Cover');
-    const rerecordBadge = rerecordSetting === 'none' ? '🚫 Original Masters' : '📻 Any Cut';
-
-    embed.addFields({
-      name: '🎛️ Studio Guard',
-      value: `\`${liveBadge}\`  •  \`${coverBadge}\`  •  \`${rerecordBadge}\``,
-      inline: false,
-    });
-
-    const standbyDecks = dynamicSettings.getNumber('audio_standby_decks_count', 15);
-    embed.setFooter({
-      text: `VEXO 2.0 • ${standbyDecks} Standby Decks in RAM • ${bitrate} kbps Lossless PCM • Queue: ${state.queueLength} tracks`,
-    });
-
-    // Row 1: Primary Playback & Taste Controls (5 symmetrical buttons)
-    const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    // Single-Row of exactly 4 controls (Zero wrapping on mobile & desktop)
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId('btn_ui_replay')
         .setEmoji('⏮️')
@@ -569,47 +506,13 @@ export class PlayerUiService {
         .setLabel('Skip')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId('btn_ui_like')
-        .setEmoji('❤️')
-        .setLabel('Like')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('btn_ui_dislike')
-        .setEmoji('💔')
-        .setLabel('Dislike')
+        .setCustomId('btn_ui_more')
+        .setEmoji('⚙️')
+        .setLabel('More...')
         .setStyle(ButtonStyle.Secondary)
     );
 
-    // Row 2: Queue, Curation, Studio Guard & Web Studio (5 symmetrical buttons)
-    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId('btn_ui_vibe')
-        .setEmoji('✨')
-        .setLabel('Vibe')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('btn_ui_shuffle')
-        .setEmoji('🔀')
-        .setLabel('Shuffle')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('btn_ui_queue')
-        .setEmoji('📋')
-        .setLabel('Queue')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('btn_ui_filter')
-        .setEmoji('🎛️')
-        .setLabel('Filter')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setLabel('Web Studio')
-        .setEmoji('🌐')
-        .setStyle(ButtonStyle.Link)
-        .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `https://${cleanWebUrl}`)
-    );
-
-    return { embed, components: [row1, row2] };
+    return { embed, components: [row] };
   }
 
   /**

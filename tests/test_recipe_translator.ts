@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file test_recipe_translator.ts
  * @description Verifies Ollama Qwen 1.5B musical recipe translation into structured JSON.

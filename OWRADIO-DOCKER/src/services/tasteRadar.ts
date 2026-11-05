@@ -142,6 +142,49 @@ export class TasteRadar {
   }
 
   /**
+   * Prunes low-retention, zero-engagement or disliked tracks to maintain catalog turnover
+   * while strictly protecting Tier 0 favorites, manual requests, and canonical classics.
+   */
+  public pruneStaleCatalog(countToPrune: number): number {
+    if (countToPrune <= 0) return 0;
+    try {
+      const candidates = sqlite.prepare(`
+        SELECT s.id
+        FROM songs s
+        WHERE s.id NOT IN (
+          SELECT target_key FROM user_preferences WHERE target_type = 'song' AND likes > 0
+        )
+        AND s.id NOT IN (
+          SELECT DISTINCT song_id FROM playback_history WHERE is_manual_request = 1
+        )
+        ORDER BY
+          (SELECT COALESCE(SUM(dislikes), 0) FROM user_preferences WHERE target_key = s.id OR target_key = LOWER(s.artist)) DESC,
+          (SELECT COALESCE(SUM(early_skips), 0) FROM user_preferences WHERE target_key = s.id OR target_key = LOWER(s.artist)) DESC,
+          s.created_at ASC
+        LIMIT ?
+      `).all(countToPrune) as Array<{ id: string }>;
+
+      if (candidates.length === 0) return 0;
+
+      const ids = candidates.map((c) => c.id);
+      const placeholders = ids.map(() => '?').join(',');
+
+      sqlite.transaction(() => {
+        try {
+          sqlite.prepare(`DELETE FROM song_embeddings WHERE song_id IN (${placeholders})`).run(...ids);
+        } catch {}
+        sqlite.prepare(`DELETE FROM songs WHERE id IN (${placeholders})`).run(...ids);
+      })();
+
+      console.log(`[TasteRadar] 🔄 Catalog Turnover: Pruned ${ids.length} stale/disliked tracks to free capacity for fresh discoveries.`);
+      return ids.length;
+    } catch (err) {
+      console.warn('[TasteRadar] Catalog pruning warning:', (err as Error).message);
+      return 0;
+    }
+  }
+
+  /**
    * Run a single autonomous taste expansion cycle.
    * Discovers 20-50 novel tracks around the room's tastes, embeds them, and reloads vector index.
    */
@@ -155,10 +198,6 @@ export class TasteRadar {
     try {
       const stats = this.getCatalogStats();
       const targetSize = dynamicSettings.getNumber('radar_target_catalog_size', TARGET_CATALOG_SIZE);
-      if (stats.totalSongs >= targetSize) {
-        console.log(`[TasteRadar] 🎯 Target catalog size reached (${stats.totalSongs.toLocaleString()} / ${targetSize.toLocaleString()}). Radar idling in maintenance mode.`);
-        return { mined: 0, total: stats.totalSongs, seedArtist: 'target_reached' };
-      }
 
       // Step 1: Select a Seed Artist from Active Listeners or Server Top Affinities
       const seed = this.selectSeedArtist();
@@ -229,30 +268,40 @@ export class TasteRadar {
         return { mined: 0, total: stats.totalSongs, seedArtist: seed.name };
       }
 
-      // Step 5: Batch Embed via Ollama /api/embed
-      const inputs = newTracks.map((t) => {
-        let desc = `${t.artist} - ${t.title}`;
-        if (t.album) desc += ` [Album: ${t.album}]`;
-        if (t.genre) desc += ` [Genre: ${t.genre}]`;
-        return desc;
-      });
-
-      const embedRes = await fetch('http://127.0.0.1:11434/api/embed', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'all-minilm',
-          input: inputs,
-        }),
-      });
-
-      if (!embedRes.ok) {
-        throw new Error(`Ollama embed error: ${embedRes.status} ${embedRes.statusText}`);
+      // Check catalog capacity and run turnover pruning if approaching ceiling
+      if (stats.totalSongs + newTracks.length > targetSize) {
+        const needToPrune = (stats.totalSongs + newTracks.length) - targetSize;
+        this.pruneStaleCatalog(needToPrune);
       }
 
-      const embedData = (await embedRes.json()) as any;
-      if (!embedData.embeddings || embedData.embeddings.length !== newTracks.length) {
-        throw new Error(`Embedding count mismatch: expected ${newTracks.length}, got ${embedData.embeddings?.length}`);
+      // Step 5: Optional Batch Embed via Ollama /api/embed
+      let embedData: any = null;
+      try {
+        const inputs = newTracks.map((t) => {
+          let desc = `${t.artist} - ${t.title}`;
+          if (t.album) desc += ` [Album: ${t.album}]`;
+          if (t.genre) desc += ` [Genre: ${t.genre}]`;
+          return desc;
+        });
+
+        const embedRes = await fetch('http://127.0.0.1:11434/api/embed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'all-minilm',
+            input: inputs,
+          }),
+          signal: AbortSignal.timeout(8000),
+        });
+
+        if (embedRes.ok) {
+          const json = (await embedRes.json()) as any;
+          if (json.embeddings && json.embeddings.length === newTracks.length) {
+            embedData = json;
+          }
+        }
+      } catch {
+        // Ollama offline or uninstalled: non-fatal, metadata is still saved to SQLite catalog
       }
 
       // Step 6: Atomic SQLite Transaction Insert into songs & song_embeddings
@@ -283,15 +332,19 @@ export class TasteRadar {
             now
           );
 
-          const raw = new Float32Array(embedData.embeddings[i]);
-          normalize(raw);
-          const buf = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
-          insertVectorStmt.run(t.id, buf, now);
+          if (embedData?.embeddings?.[i]) {
+            const raw = new Float32Array(embedData.embeddings[i]);
+            normalize(raw);
+            const buf = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+            insertVectorStmt.run(t.id, buf, now);
+          }
         }
       })();
 
-      // Step 7: Hot-Reload in-memory vector index so tracks are immediately searchable
-      await vectorCurator.reload();
+      // Step 7: Hot-Reload in-memory vector index if embeddings were added
+      if (embedData) {
+        await vectorCurator.reload().catch(() => {});
+      }
 
       const newStats = this.getCatalogStats();
       const elapsed = Math.round(performance.now() - t0);

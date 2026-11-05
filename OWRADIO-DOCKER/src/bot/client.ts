@@ -10,6 +10,10 @@ import {
   REST,
   Routes,
   Events,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
   type Interaction,
   type VoiceState,
 } from 'discord.js';
@@ -18,6 +22,7 @@ import { sqlite } from '../db/index.js';
 import featureFlags from '../services/featureFlags.js';
 import vectorCurator from '../services/vectorCurator.js';
 import deezer from '../services/deezer.js';
+import dynamicSettings from '../services/dynamicSettings.js';
 import type { GuildPlayer } from '../player/GuildPlayer.js';
 import { executeAutoResume } from './autoResume.js';
 import playerUi from './playerUi.js';
@@ -303,8 +308,95 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
         return;
       }
 
-      if (customId === 'btn_ui_filter' || customId.startsWith('btn_toggle_filter_') || customId === 'btn_filter_recurate_now') {
-        await handleFilterButtonInteraction(interaction as any, player);
+      if (customId === 'btn_ui_more') {
+        const state = player.getStatePayload();
+        const liveSetting = dynamicSettings.getString('curation_filter_live', 'none');
+        const coverSetting = dynamicSettings.getString('curation_filter_covers', 'none');
+        const rerecordSetting = dynamicSettings.getString('curation_filter_rerecorded', 'none');
+        const liveBadge = liveSetting === 'none' ? '🚫 No Lives' : (liveSetting === 'high_quality' ? '⭐ HQ Lives' : '📻 Any Live');
+        const coverBadge = coverSetting === 'none' ? '🚫 No Covers' : (coverSetting === 'high_quality' ? '⭐ HQ Covers' : '📻 Any Cover');
+        const rerecordBadge = rerecordSetting === 'none' ? '🚫 Original Masters' : '📻 Any Cut';
+
+        const webBaseUrl = config.PUBLIC_URL || (state.streamUrl && !state.streamUrl.includes('127.0.0.1') ? state.streamUrl.replace('/stream.mp3', '') : 'https://vexo.plingindigo.org');
+        const cleanWebUrl = webBaseUrl.replace(/\/+$/, '');
+
+        const moreEmbed = new EmbedBuilder()
+          .setColor(0x6366f1)
+          .setTitle('⚙️ Station Controls & Listener Suite')
+          .setDescription(
+            `🔊 **Volume:** \`${state.volume}%\`  •  📋 **Queue Depth:** \`${state.queueLength} tracks\`\n` +
+            `🎛️ **Active Studio Guard:** \`${liveBadge}\`  •  \`${coverBadge}\`  •  \`${rerecordBadge}\`\n` +
+            (state.track ? `🎵 **Now Playing:** *${state.track.title}* — **${state.track.artist}**` : '🔇 *Idle*')
+          );
+
+        // Row 1: Taste Actions
+        const r1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId('btn_ui_like')
+            .setEmoji('❤️')
+            .setLabel('Like Song')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('btn_ui_dislike')
+            .setEmoji('💔')
+            .setLabel('Dislike Song')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        // Row 2: Queue & Curation
+        const r2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId('btn_ui_vibe')
+            .setEmoji('✨')
+            .setLabel('AI Vibe')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('btn_ui_shuffle')
+            .setEmoji('🔀')
+            .setLabel('Shuffle')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('btn_ui_queue')
+            .setEmoji('📋')
+            .setLabel('Queue')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        // Row 3: Studio Guard Filter, Web Studio & Close
+        const r3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId('btn_ui_filter')
+            .setEmoji('🎛️')
+            .setLabel('Studio Guard')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setLabel('Web Studio')
+            .setEmoji('🌐')
+            .setStyle(ButtonStyle.Link)
+            .setURL(cleanWebUrl.startsWith('http') ? cleanWebUrl : `https://${cleanWebUrl}`),
+          new ButtonBuilder()
+            .setCustomId('btn_ui_close_ephemeral')
+            .setEmoji('✕')
+            .setLabel('Close')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        await interaction.reply({
+          embeds: [moreEmbed],
+          components: [r1, r2, r3],
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (customId === 'btn_ui_close_ephemeral') {
+        try {
+          if ('deleteReply' in interaction && typeof (interaction as any).deleteReply === 'function') {
+            await (interaction as any).deleteReply();
+          } else {
+            await (interaction as any).deferUpdate().catch(() => {});
+          }
+        } catch {}
         return;
       }
 

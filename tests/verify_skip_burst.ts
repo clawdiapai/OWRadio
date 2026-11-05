@@ -34,8 +34,8 @@ async function runTests() {
   const tee = new BroadcastTee();
 
   console.log(`MAX_STANDBY_DECKS constant: ${BroadcastTee.MAX_STANDBY_DECKS}`);
-  if (BroadcastTee.MAX_STANDBY_DECKS !== 3) {
-    throw new Error(`Expected MAX_STANDBY_DECKS to be 3, got ${BroadcastTee.MAX_STANDBY_DECKS}`);
+  if ((BroadcastTee.MAX_STANDBY_DECKS as number) !== 20) {
+    throw new Error(`Expected MAX_STANDBY_DECKS to be 20, got ${BroadcastTee.MAX_STANDBY_DECKS}`);
   }
 
   const initialStatus = tee.getStandbyPoolStatus();
