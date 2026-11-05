@@ -34,6 +34,7 @@ import {
 } from './commands/play.js';
 import {
   controlCommand,
+  voiceCommand,
   skipCommand,
   pauseCommand,
   resumeCommand,
@@ -89,15 +90,14 @@ import {
   handleFilterButtonInteraction,
 } from './commands/filter.js';
 
-// --- Consolidated Slash Commands List (Option C: 7 Master Commands) ---
+// --- Consolidated Slash Commands List (Strictly 6 Master Commands) ---
 const ALL_COMMANDS = [
   playCommand,     // /play <query>
   vibeCommand,     // /vibe <prompt>
-  controlCommand,  // /control <skip|pause|resume|replay|queue|clear|shuffle|remove|volume|status|history|like|dislike>
-  stationCommand,  // /station <preset|throwback|morph|filter|artist>
-  tasteCommand,    // /taste <profile|playlist|artists|genres|clear|veto>
-  joinCommand,     // /join
-  leaveCommand,    // /leave
+  controlCommand,  // /control <action> [percent]
+  stationCommand,  // /station <action> [preset] [year] [vibe] [artist]
+  tasteCommand,    // /taste <action> [url] [list] [target] [type]
+  voiceCommand,    // /voice <action>
 ];
 
 export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
@@ -415,8 +415,8 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
           await handleVibe(interaction, player);
           break;
         case 'control': {
-          const sub = interaction.options.getSubcommand();
-          switch (sub) {
+          const action = interaction.options.getString('action') || (interaction.options as any).getSubcommand?.(false);
+          switch (action) {
             case 'skip':
               await handleSkip(interaction, player);
               break;
@@ -457,13 +457,13 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
               await handleDislike(interaction, player);
               break;
             default:
-              await interaction.reply({ content: `⚠️ Unknown control subcommand: ${sub}`, ephemeral: true });
+              await interaction.reply({ content: `⚠️ Unknown control action: ${action}`, ephemeral: true });
           }
           break;
         }
         case 'station': {
-          const sub = interaction.options.getSubcommand();
-          switch (sub) {
+          const action = interaction.options.getString('action') || (interaction.options as any).getSubcommand?.(false);
+          switch (action) {
             case 'preset':
               await handleRadio(interaction, player);
               break;
@@ -480,13 +480,24 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
               await handleArtist(interaction, player);
               break;
             default:
-              await interaction.reply({ content: `⚠️ Unknown station subcommand: ${sub}`, ephemeral: true });
+              await interaction.reply({ content: `⚠️ Unknown station action: ${action}`, ephemeral: true });
           }
           break;
         }
         case 'taste':
           await handleTaste(interaction, player);
           break;
+        case 'voice': {
+          const action = interaction.options.getString('action') || (interaction.options as any).getSubcommand?.(false);
+          if (action === 'join') {
+            await handleJoin(interaction, player);
+          } else if (action === 'leave') {
+            await handleLeave(interaction, player);
+          } else {
+            await interaction.reply({ content: `⚠️ Unknown voice action: ${action}`, ephemeral: true });
+          }
+          break;
+        }
         case 'join':
           await handleJoin(interaction, player);
           break;

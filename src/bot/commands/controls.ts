@@ -19,33 +19,51 @@ import { sqlite } from '../../db/index.js';
 import vetoService from '../../services/vetoService.js';
 import dynamicSettings from '../../services/dynamicSettings.js';
 
-// --- Unified /control Master Command (Option C) ---
+// --- Unified /control Master Command (Clean 6-Command Architecture) ---
 export const controlCommand = new SlashCommandBuilder()
   .setName('control')
   .setDescription('Player and queue playback controls')
-  .addSubcommand((sub) => sub.setName('skip').setDescription('Skip the currently playing track'))
-  .addSubcommand((sub) => sub.setName('pause').setDescription('Pause current playback'))
-  .addSubcommand((sub) => sub.setName('resume').setDescription('Resume paused playback'))
-  .addSubcommand((sub) => sub.setName('replay').setDescription('Replay current track from the beginning'))
-  .addSubcommand((sub) => sub.setName('queue').setDescription('View upcoming curated queue (ephemeral)'))
-  .addSubcommand((sub) => sub.setName('clear').setDescription('Clear upcoming tracks from queue (Admin only)'))
-  .addSubcommand((sub) => sub.setName('shuffle').setDescription('Shuffle upcoming tracks in queue'))
-  .addSubcommand((sub) => sub.setName('remove').setDescription('Interactive picker to remove a song from queue'))
-  .addSubcommand((sub) => sub.setName('status').setDescription('View bot ping, stream latency, and uptime'))
-  .addSubcommand((sub) => sub.setName('history').setDescription('View recently played songs'))
-  .addSubcommand((sub) => sub.setName('like').setDescription('Like current track to boost its style in room taste'))
-  .addSubcommand((sub) => sub.setName('dislike').setDescription('Dislike current track (3 room dislikes triggers auto-veto)'))
-  .addSubcommand((sub) =>
-    sub
-      .setName('volume')
-      .setDescription('Set playback volume 1-100 (Admin only)')
-      .addIntegerOption((opt) =>
-        opt
-          .setName('percent')
-          .setDescription('Volume level between 1 and 100')
-          .setRequired(true)
-          .setMinValue(1)
-          .setMaxValue(100)
+  .addStringOption((opt) =>
+    opt
+      .setName('action')
+      .setDescription('Playback control action to execute')
+      .setRequired(true)
+      .addChoices(
+        { name: '⏭️ Skip Track', value: 'skip' },
+        { name: '⏸️ Pause Playback', value: 'pause' },
+        { name: '▶️ Resume Playback', value: 'resume' },
+        { name: '🔄 Replay from Beginning', value: 'replay' },
+        { name: '📋 View Upcoming Queue', value: 'queue' },
+        { name: '🧹 Clear Upcoming Queue (Admin)', value: 'clear' },
+        { name: '🔀 Shuffle Queue', value: 'shuffle' },
+        { name: '🗑️ Remove Song from Queue', value: 'remove' },
+        { name: '🔊 Set Volume Level', value: 'volume' },
+        { name: '⚡ Bot Status & Ping', value: 'status' },
+        { name: '📜 Playback History', value: 'history' },
+        { name: '❤️ Like Song (Boost Room Affinity)', value: 'like' },
+        { name: '💔 Dislike Song (3 Votes Auto-Veto)', value: 'dislike' }
+      )
+  )
+  .addIntegerOption((opt) =>
+    opt
+      .setName('percent')
+      .setDescription('Volume level between 1 and 100 (only used with action: volume)')
+      .setRequired(false)
+      .setMinValue(1)
+      .setMaxValue(100)
+  );
+
+export const voiceCommand = new SlashCommandBuilder()
+  .setName('voice')
+  .setDescription('Connect or disconnect the bot from voice channels')
+  .addStringOption((opt) =>
+    opt
+      .setName('action')
+      .setDescription('Voice connection action')
+      .setRequired(true)
+      .addChoices(
+        { name: '🔊 Join Voice Channel', value: 'join' },
+        { name: '👋 Leave Voice Channel', value: 'leave' }
       )
   );
 
@@ -448,7 +466,14 @@ export async function handleVolume(
   interaction: ChatInputCommandInteraction,
   player: GuildPlayer
 ): Promise<void> {
-  const vol = interaction.options.getInteger('percent', true);
+  const vol = interaction.options.getInteger('percent');
+  if (vol === null || isNaN(vol)) {
+    await interaction.reply({
+      content: '❌ Please specify the volume percentage (1-100), e.g. `/control action:volume percent:80`',
+      ephemeral: true,
+    });
+    return;
+  }
   player.setVolume(vol);
   await interaction.reply({ content: `🔊 Volume set to **${vol}%**`, ephemeral: true });
 }
@@ -540,6 +565,8 @@ export async function handleDislike(
 }
 
 export default {
+  controlCommand,
+  voiceCommand,
   skipCommand,
   pauseCommand,
   resumeCommand,

@@ -44,119 +44,97 @@ export const artistCommand = new SlashCommandBuilder()
       .setRequired(true)
   );
 
-// --- 2. /taste Command ---
+// --- 2. /taste Command (Clean 6-Command Architecture) ---
 export const tasteCommand = new SlashCommandBuilder()
   .setName('taste')
   .setDescription('Manage your taste profile and view collective room DNA')
-  .addSubcommand((sub) =>
-    sub.setName('profile')
-      .setDescription('Display the collective 8-axis Taste Radar Fingerprint for listeners in voice')
-  )
-  .addSubcommand((sub) =>
-    sub.setName('playlist')
-      .setDescription('Onboard your musical taste by dropping a Spotify or YouTube playlist URL')
-      .addStringOption((opt) =>
-        opt.setName('url')
-          .setDescription('Public Spotify or YouTube playlist link')
-          .setRequired(true)
+  .addStringOption((opt) =>
+    opt
+      .setName('action')
+      .setDescription('Taste management action to execute')
+      .setRequired(true)
+      .addChoices(
+        { name: '🕸️ View Room Taste Radar', value: 'profile' },
+        { name: '📥 Import Playlist URL (Spotify/YouTube)', value: 'playlist' },
+        { name: '🎧 Add Favorite Artists', value: 'artists' },
+        { name: '🎛️ Add Preferred Genres', value: 'genres' },
+        { name: '🚫 Veto / Blacklist Artist or Track', value: 'veto' },
+        { name: '🗑️ Reset Saved Taste Profile', value: 'clear' }
       )
   )
-  .addSubcommand((sub) =>
-    sub.setName('artists')
-      .setDescription('Add your top favorite artists (comma-separated)')
-      .addStringOption((opt) =>
-        opt.setName('list')
-          .setDescription('e.g. Daft Punk, Radiohead, Steely Dan, The Cure')
-          .setRequired(true)
-      )
+  .addStringOption((opt) =>
+    opt
+      .setName('url')
+      .setDescription('Public Spotify or YouTube playlist link (used with action: playlist)')
+      .setRequired(false)
   )
-    .addSubcommand((sub) =>
-    sub.setName('genres')
-      .setDescription('Add your preferred music genres (comma-separated)')
-      .addStringOption((opt) =>
-        opt.setName('list')
-          .setDescription('e.g. hip hop, techno, dnb, rock, synthwave')
-          .setRequired(true)
-      )
+  .addStringOption((opt) =>
+    opt
+      .setName('list')
+      .setDescription('Comma-separated artists or genres (used with action: artists/genres)')
+      .setRequired(false)
   )
-  .addSubcommand((sub) =>
-    sub.setName('clear')
-      .setDescription('Reset your stored taste profile preferences')
+  .addStringOption((opt) =>
+    opt
+      .setName('target')
+      .setDescription('Artist or song name to blacklist (used with action: veto)')
+      .setRequired(false)
   )
-  .addSubcommand((sub) =>
-    sub.setName('veto')
-      .setDescription('Blacklist an artist or track from being curated in this room')
-      .addStringOption((opt) =>
-        opt.setName('name')
-          .setDescription('Artist or song name to blacklist')
-          .setRequired(true)
-      )
-      .addStringOption((opt) =>
-        opt.setName('type')
-          .setDescription('Blacklist type (default: artist)')
-          .addChoices({ name: 'Artist', value: 'artist' }, { name: 'Song', value: 'song' })
-      )
+  .addStringOption((opt) =>
+    opt
+      .setName('type')
+      .setDescription('Blacklist target type (default: artist)')
+      .setRequired(false)
+      .addChoices({ name: 'Artist', value: 'artist' }, { name: 'Song / Track', value: 'song' })
   );
 
-// --- Unified /station Master Command (Option C) ---
+// --- Unified /station Master Command (Clean 6-Command Architecture) ---
 export const stationCommand = new SlashCommandBuilder()
   .setName('station')
   .setDescription('Radio presets, vintage time machine, morphing, and audio filters')
-  .addSubcommand((sub) =>
-    sub
+  .addStringOption((opt) =>
+    opt
+      .setName('action')
+      .setDescription('Station operation to execute')
+      .setRequired(true)
+      .addChoices(
+        { name: '📻 Switch Radio Station Preset', value: 'preset' },
+        { name: '⏳ Time Capsule (Vintage Year)', value: 'throwback' },
+        { name: '🌀 DJ Morph (Smooth Vibe Transition)', value: 'morph' },
+        { name: '🎛️ Studio Guard (Audio Filters)', value: 'filter' },
+        { name: '🎤 Explore Artist Discography', value: 'artist' }
+      )
+  )
+  .addStringOption((opt) => {
+    opt
       .setName('preset')
-      .setDescription('Switch to a curated radio station preset or "off"')
-      .addStringOption((opt) => {
-        opt
-          .setName('station')
-          .setDescription('Select station preset or "off" to return to standard curation')
-          .setRequired(false);
-        for (const station of RADIO_STATIONS) {
-          opt.addChoices({ name: `${station.icon} ${station.name}`.slice(0, 100), value: station.id });
-        }
-        opt.addChoices({ name: '⏹️ Off (Standard Dynamic Curation)', value: 'off' });
-        return opt;
-      })
+      .setDescription('Station preset (used with action: preset)')
+      .setRequired(false);
+    for (const station of RADIO_STATIONS) {
+      opt.addChoices({ name: `${station.icon} ${station.name}`.slice(0, 100), value: station.id });
+    }
+    opt.addChoices({ name: '⏹️ Off (Standard Dynamic Curation)', value: 'off' });
+    return opt;
+  })
+  .addIntegerOption((opt) =>
+    opt
+      .setName('year')
+      .setDescription('Release year (e.g. 1984, 1997) or omit to disengage Time Capsule')
+      .setRequired(false)
+      .setMinValue(1950)
+      .setMaxValue(2026)
   )
-  .addSubcommand((sub) =>
-    sub
-      .setName('throwback')
-      .setDescription('Time Capsule: Curate vintage record releases from a specific year')
-      .addIntegerOption((opt) =>
-        opt
-          .setName('year')
-          .setDescription('Release year (e.g. 1984, 1997, 2005) or omit to disengage')
-          .setRequired(false)
-          .setMinValue(1950)
-          .setMaxValue(2026)
-      )
+  .addStringOption((opt) =>
+    opt
+      .setName('vibe')
+      .setDescription('Target aesthetic destination (e.g. "dark synthwave", "dreampop chill")')
+      .setRequired(false)
   )
-  .addSubcommand((sub) =>
-    sub
-      .setName('morph')
-      .setDescription('DJ Morph: Smoothly interpolate room taste towards a new target vibe')
-      .addStringOption((opt) =>
-        opt
-          .setName('vibe')
-          .setDescription('Target aesthetic destination (e.g. "dark synthwave", "dreampop chill")')
-          .setRequired(true)
-      )
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('filter')
-      .setDescription('Interactive audio purity & quality filter toggles (Covers, Lives, Instrumentals)')
-  )
-  .addSubcommand((sub) =>
-    sub
+  .addStringOption((opt) =>
+    opt
       .setName('artist')
-      .setDescription('Explore an artist discography with interactive album selection')
-      .addStringOption((opt) =>
-        opt
-          .setName('name')
-          .setDescription('Artist name (e.g. "Daft Punk", "Radiohead")')
-          .setRequired(true)
-      )
+      .setDescription('Artist name for discography exploration (e.g. "Daft Punk", "Radiohead")')
+      .setRequired(false)
   );
 
 // --- 3. /throwback Command ---
@@ -255,7 +233,16 @@ export async function handleArtist(
 
   if (!(await ensureVoiceConnection(interaction, player))) return;
 
-  const artistQuery = interaction.options.getString('name', true).trim();
+  const artistQuery = (
+    interaction.options.getString('artist') ||
+    interaction.options.getString('name') ||
+    ''
+  ).trim();
+
+  if (!artistQuery) {
+    await interaction.editReply('❌ Please specify an artist name: `/station action:artist artist:Radiohead`');
+    return;
+  }
 
   // 1. Search Deezer catalog using dedicated artist search
   let artist = await deezer.searchArtist(artistQuery);
@@ -819,7 +806,7 @@ export async function handleTaste(
   interaction: ChatInputCommandInteraction,
   player: GuildPlayer
 ): Promise<void> {
-  const sub = interaction.options.getSubcommand(false) || 'profile';
+  const sub = interaction.options.getString('action') || interaction.options.getSubcommand(false) || 'profile';
 
   if (sub === 'veto') {
     return handleVeto(interaction, player);
@@ -828,7 +815,11 @@ export async function handleTaste(
   await interaction.deferReply();
 
   if (sub === 'playlist') {
-    const url = interaction.options.getString('url', true);
+    const url = interaction.options.getString('url');
+    if (!url) {
+      await interaction.editReply('❌ Please specify a public playlist URL: `/taste action:playlist url:https://open.spotify.com/playlist/...`');
+      return;
+    }
     try {
       const profile = await playlistParser.registerUserPlaylist(interaction.user.id, url);
       const topArtistsStr = profile.topArtists
@@ -855,7 +846,11 @@ export async function handleTaste(
   }
 
   if (sub === 'artists') {
-    const rawList = interaction.options.getString('list', true);
+    const rawList = interaction.options.getString('list');
+    if (!rawList) {
+      await interaction.editReply('❌ Please specify comma-separated artist names: `/taste action:artists list:Daft Punk, Radiohead`');
+      return;
+    }
     const artists = rawList
       .split(',')
       .map((s) => s.trim())
@@ -897,8 +892,12 @@ export async function handleTaste(
     return;
   }
 
-    if (sub === 'genres') {
-    const rawList = interaction.options.getString('list', true);
+  if (sub === 'genres') {
+    const rawList = interaction.options.getString('list');
+    if (!rawList) {
+      await interaction.editReply('❌ Please specify comma-separated genres: `/taste action:genres list:hip hop, techno, synthwave`');
+      return;
+    }
     const genres = rawList
       .split(',')
       .map((s) => s.trim().toLowerCase())
@@ -1153,7 +1152,7 @@ export async function handleRadio(
     return;
   }
 
-  const stationId = interaction.options.getString('station');
+  const stationId = interaction.options.getString('preset') || interaction.options.getString('station');
 
   if (!stationId || stationId === 'off') {
     stationCurator.setStation(null);
@@ -1199,7 +1198,16 @@ export async function handleMorph(
 
   if (!(await ensureVoiceConnection(interaction, player))) return;
 
-  const targetVibe = interaction.options.getString('vibe', true).trim();
+  const targetVibe = (
+    interaction.options.getString('vibe') ||
+    ''
+  ).trim();
+
+  if (!targetVibe) {
+    await interaction.editReply('❌ Please specify a target vibe aesthetic: `/station action:morph vibe:dark synthwave`');
+    return;
+  }
+
   const vector = await vectorCurator.embedText(targetVibe);
 
   if (!vector) {
@@ -1231,7 +1239,22 @@ export async function handleVeto(
   interaction: ChatInputCommandInteraction,
   player: GuildPlayer
 ): Promise<void> {
-  const name = interaction.options.getString('name', true).trim();
+  const name = (
+    interaction.options.getString('target') ||
+    interaction.options.getString('name') ||
+    ''
+  ).trim();
+
+  if (!name) {
+    const msg = '❌ Please specify an artist or track to veto: `/taste action:veto target:Coldplay`';
+    if (interaction.deferred) {
+      await interaction.editReply(msg);
+    } else {
+      await interaction.reply({ content: msg, ephemeral: true });
+    }
+    return;
+  }
+
   const rawType = interaction.options.getString('type') || 'artist';
   const type: 'artist' | 'song' = rawType === 'track' || rawType === 'song' ? 'song' : 'artist';
 
@@ -1250,9 +1273,14 @@ export async function handleVeto(
   // Recurate upcoming buffer to remove any newly vetoed items
   await player.recurateAutoplayBuffer();
 
-  await interaction.reply({
-    content: `🚫 **Vetoed ${type}:** "${name}". It has been blacklisted and purged from upcoming curation.`,
-    ephemeral: true,
-  });
+  const msg = `🚫 **Vetoed ${type}:** "${name}". It has been blacklisted and purged from upcoming curation.`;
+  if (interaction.deferred) {
+    await interaction.editReply(msg);
+  } else {
+    await interaction.reply({
+      content: msg,
+      ephemeral: true,
+    });
+  }
 }
 
