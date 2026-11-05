@@ -190,6 +190,134 @@ document.addEventListener('visibilitychange', () => {
 
 let lastPlayedTrackId = undefined;
 
+// ========================================================
+// BRAIN MATRIX • NEURAL EXECUTION STACK (LEVEL 2)
+// ========================================================
+let lastRenderedBrainTrackId = undefined;
+let lastRenderedBrainActiveCount = -1;
+
+const DEFAULT_BRAIN_PILLS = [
+  { id: 'jev_decision', name: 'Jev Decision Engine', category: 'engine', categoryLabel: 'Decision Engines', icon: '🎯', tag: 'DECISION', description: 'Discriminative multi-candidate ranking model scoring tracks by listener affinity overlap and freshness decay.', defaultOffTelemetry: 'Dormant: Station running in Hybrid JIT mode; Jev ranker not engaged.' },
+  { id: 'vector_latent', name: 'Vector Latent JEPA', category: 'engine', categoryLabel: 'Decision Engines', icon: '⚡', tag: 'LATENT', description: '384-dimensional cosine similarity matching in RAM embedding space finding nearest acoustic neighbors to the room centroid.', defaultOffTelemetry: 'Dormant: Latent vector cosine space on standby; track resolved via collaborative open graph.' },
+  { id: 'hybrid_jit', name: 'Hybrid JIT Graph', category: 'engine', categoryLabel: 'Decision Engines', icon: '🔀', tag: 'JIT-GRAPH', description: 'Real-time 300ms traversal of Deezer & Last.fm 100M+ open collaborative music graphs, completely bypassing static database scraping.', defaultOffTelemetry: 'Dormant: Collaborative graph not selected for this cut.' },
+  { id: 'qwen_llm', name: 'Qwen 1.5B Local LLM', category: 'engine', categoryLabel: 'Decision Engines', icon: '🤖', tag: 'NEURAL-LLM', description: 'Local compact 1.5B parameter neural language model running locally (clamped to 2 CPU threads), translating human vibes and listener affinities into curated picks.', defaultOffTelemetry: 'Dormant: Local LLM inference idle; track curated without language model tokens.' },
+  { id: 'anchor_20', name: '20% Core Anchor', category: 'engine', categoryLabel: 'Decision Engines', icon: '⚓', tag: 'ANTI-ECHO', description: '1st Anti-Echo shield: plays verified comfort favorites and cornerstone tracks directly from active listeners’ seeds.', defaultOffTelemetry: 'Dormant: Random roll bypassed core anchor slice in favor of deep-cut exploration.' },
+  { id: 'deepcut_50', name: '50% Collaborative Deep-Cut', category: 'engine', categoryLabel: 'Decision Engines', icon: '🔍', tag: 'DEEP-CUT', description: '2nd Anti-Echo shield: explores 1st-degree related artist graphs (ranks 5–30) to unearth obscure album b-sides listeners haven’t heard recently.', defaultOffTelemetry: 'Dormant: Collaborative deep-cut slice was not chosen for this track.' },
+  { id: 'bridge_30', name: '30% Musical Bridge', category: 'engine', categoryLabel: 'Decision Engines', icon: '🌉', tag: 'BRIDGE', description: '3rd Anti-Echo shield: identifies transitional artists that harmonize disparate musical tastes between multiple listeners in the channel.', defaultOffTelemetry: 'Dormant: Musical bridge slice not active for this playback cycle.' },
+  { id: 'catalog_vault', name: 'Local Catalog Vault', category: 'engine', categoryLabel: 'Decision Engines', icon: '🏛️', tag: 'LIBRARY', description: 'Autonomous catalog library selection: mines unplayed deep discoveries (0 plays) or longest-rested anti-fatigue tracks from local SQLite storage.', defaultOffTelemetry: 'Dormant: Track sourced directly from online collaborative streaming.' },
+  { id: 'time_capsule', name: 'Grounded Time Capsule', category: 'engine', categoryLabel: 'Decision Engines', icon: '⏳', tag: 'HISTORICAL', description: 'Strict historical release date grounding: locks curation into verified record release dates for a vintage era (e.g. 1984) with zero hallucination.', defaultOffTelemetry: 'Dormant: Time Capsule vintage era lock is currently inactive.' },
+  { id: 'story_arc', name: 'Story Arc / Circadian', category: 'engine', categoryLabel: 'Decision Engines', icon: '🌅', tag: 'CIRCADIAN', description: 'Modulates station energy across the day via a 4-phase broadcast cycle (Warmup ➔ Build ➔ Climax ➔ Chill) aligned with real-time circadian hours.', defaultOffTelemetry: 'Dormant: Station running freeform autoplay without active story arc constraints.' },
+  { id: 'user_request', name: 'User / VIP Request', category: 'engine', categoryLabel: 'Decision Engines', icon: '👑', tag: 'VIP-QUEUE', description: 'Explicit listener request submitted via Discord /play or Web Studio queue; bypasses all autoplay heuristics and gives instant priority.', defaultOffTelemetry: 'Dormant: Autonomous autoplay track (not a manual user submission).' },
+  { id: 'vibe_recipe', name: 'AI Vibe Recipe', category: 'engine', categoryLabel: 'Decision Engines', icon: '✨', tag: 'VIBE-NLP', description: 'Natural language prompt steering: translates vibes (e.g., "cyberpunk rainy drive") into acoustic and genre filters.', defaultOffTelemetry: 'Dormant: No natural language vibe steering prompt currently applied.' },
+
+  { id: 'camelot_lock', name: 'Camelot Harmonic Lock', category: 'harmonic', categoryLabel: 'Acoustic & Harmonics', icon: '🎚️', tag: 'HARMONIC', description: 'Evaluates musical key compatibility on the 12-hour Camelot Wheel between consecutive tracks (relative major/minor, +1/-1 step) for zero harmonic dissonance.', defaultOffTelemetry: 'Dormant: Key transition outside adjacent harmonic positions.' },
+  { id: 'bpm_sync', name: 'BPM Beat-Sync Lock', category: 'harmonic', categoryLabel: 'Acoustic & Harmonics', icon: '⏱️', tag: 'TEMPO', description: 'Calculates tempo proximity (Δ ≤ 6% or ≤ 14%) to prevent jarring rhythm disruptions and ensure smooth, danceable station transitions.', defaultOffTelemetry: 'Dormant: Tempo delta greater than 14% (abrupt tempo change).' },
+  { id: 'adaptive_crossfade', name: 'Adaptive Crossfade', category: 'harmonic', categoryLabel: 'Acoustic & Harmonics', icon: '🌊', tag: 'CROSSFADE', description: 'Dynamically modulates crossfade envelope length (1.0s to 4.0s) in real time based on harmonic compatibility and beat alignment.', defaultOffTelemetry: 'Dormant: Standard cut applied; dynamic crossfade curve disabled.' },
+  { id: 'taste_radar', name: '8-Axis Taste Radar', category: 'consensus', categoryLabel: 'Taste Consensus', icon: '🕸️', tag: 'TASTE-DNA', description: 'Projects the room’s collective taste onto 8 acoustic dimensions (Electronic, Rock, Synth, Funk, Hip-Hop, Indie, Chill, Energy) and computes track alignment %.', defaultOffTelemetry: 'Dormant: No active Discord listeners in voice to compute collective taste centroid.' },
+  { id: 'ebu_loudness', name: 'EBU R128 Loudness', category: 'harmonic', categoryLabel: 'Acoustic & Harmonics', icon: '🔊', tag: 'BROADCAST', description: 'Real-time integrated LUFS loudness normalization (-14 LUFS target) to eliminate volume jumps between disparate albums and production eras.', defaultOffTelemetry: 'Dormant: Loudness normalization bypassed.' },
+
+  { id: 'cooldown_48h', name: '48h Song Cooldown', category: 'purity', categoryLabel: 'Purity & Gatekeepers', icon: '🛡️', tag: 'ANTI-REPEAT', description: 'Hard mathematical shield: guarantees zero songs can repeat within 48 hours across the entire station.', defaultOffTelemetry: 'Dormant: Manual request bypassed autoplay repetition cooldowns.' },
+  { id: 'artist_cooldown_2h', name: '2h Artist Cooldown', category: 'purity', categoryLabel: 'Purity & Gatekeepers', icon: '🚫', tag: 'NO-CLUSTERING', description: 'Artist anti-clustering rule: mathematically blocks any artist from repeating within 120 minutes of their previous play.', defaultOffTelemetry: 'Dormant: Manual request bypassed artist anti-clustering cooldown.' },
+  { id: 'lyrics_nlp', name: 'Lyrics NLP English Gate', category: 'purity', categoryLabel: 'Purity & Gatekeepers', icon: '🗣️', tag: 'LYRICS-NLP', description: 'Analyzes synchronized lyrics via LRCLIB with trigram & stopword language classification to ensure 99.9% English discovery.', defaultOffTelemetry: 'Dormant: Lyrics NLP verification idle or foreign cooldown lock active.' },
+  { id: 'duration_clamp', name: 'Duration Clamp (±5s)', category: 'purity', categoryLabel: 'Purity & Gatekeepers', icon: '📏', tag: 'STUDIO-CLAMP', description: 'Compares YouTube stream duration against official canonical album duration (Δ ≤ 5s) to eradicate fake 1-hour loops, skits, and 45-minute album rips.', defaultOffTelemetry: 'Dormant: Duration delta clamp bypassed for manual user request.' },
+  { id: 'topic_master', name: 'Topic Studio Master', category: 'purity', categoryLabel: 'Purity & Gatekeepers', icon: '🎯', tag: 'OFFICIAL-AUDIO', description: 'Prioritizes verified label "- Topic" channels and official studio masters, eliminating crowd noise, dialogue skits, and low-grade recordings.', defaultOffTelemetry: 'Dormant: Streamed from alternate verified source.' },
+  { id: 'room_veto_shield', name: 'Room Veto Shield', category: 'purity', categoryLabel: 'Purity & Gatekeepers', icon: '⛔', tag: 'BLACKLIST', description: 'Real-time blacklist filter: cross-references candidate against active listeners’ vetoed artists and disliked tracks.', defaultOffTelemetry: 'Dormant: Room veto shield bypassed.' },
+
+  { id: 'ram_prewarm', name: 'RAM Prewarm Deck', category: 'muscle', categoryLabel: 'Audio Muscle', icon: '⚡', tag: 'ZERO-GAP', description: 'Pre-buffers 512KB of upcoming audio into RAM before handover, delivering near-instantaneous sub-second transitions with zero dead air.', defaultOffTelemetry: 'Dormant: Cold-start stream resolution (prewarm buffer was not primed).' },
+];
+
+function renderBrainMatrix(brainPills, track) {
+  const container = document.getElementById('brains-pills-container');
+  const countBadge = document.getElementById('brains-active-count');
+  if (!container) return;
+
+  const currentTrackId = track ? track.id : null;
+  const pills = (Array.isArray(brainPills) && brainPills.length > 0)
+    ? brainPills
+    : DEFAULT_BRAIN_PILLS.map((p) => ({
+        ...p,
+        active: false,
+        telemetry: track ? p.defaultOffTelemetry : 'Station is idle. Waiting for track playback to activate neural stack.',
+      }));
+
+  const activeCount = pills.filter((p) => p.active).length;
+
+  if (countBadge) {
+    countBadge.innerText = `${activeCount} / ${pills.length} ACTIVE`;
+    if (activeCount > 0) {
+      countBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+      countBadge.style.borderColor = 'rgba(16, 185, 129, 0.35)';
+      countBadge.style.color = '#34d399';
+    } else {
+      countBadge.style.background = 'rgba(255, 255, 255, 0.05)';
+      countBadge.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+      countBadge.style.color = '#94a3b8';
+    }
+  }
+
+  // Only re-render DOM if track ID changed or active count changed
+  if (lastRenderedBrainTrackId === currentTrackId && lastRenderedBrainActiveCount === activeCount) {
+    return;
+  }
+  lastRenderedBrainTrackId = currentTrackId;
+  lastRenderedBrainActiveCount = activeCount;
+
+  // Group pills by category
+  const categories = [
+    { key: 'engine', label: 'Decision Engines', icon: '🧠' },
+    { key: 'harmonic', label: 'Acoustic & Harmonics', icon: '🎚️' },
+    { key: 'consensus', label: 'Taste Consensus', icon: '👥' },
+    { key: 'purity', label: 'Purity & Gatekeepers', icon: '🛡️' },
+    { key: 'muscle', label: 'Audio Muscle', icon: '⚡' },
+  ];
+
+  let html = '';
+
+  for (const cat of categories) {
+    const catPills = pills.filter((p) => p.category === cat.key);
+    if (catPills.length === 0) continue;
+
+    html += `
+      <div class="brains-category-section">
+        <div class="brains-category-label">
+          <span>${cat.icon}</span> ${escapeHtml(cat.label)}
+        </div>
+        <div class="brains-category-pills">
+    `;
+
+    for (const pill of catPills) {
+      const activeClass = pill.active ? `is-active cat-${pill.category}` : 'is-off';
+      const statusBadge = pill.active
+        ? '<span class="tooltip-badge badge-active">● ACTIVE ON TRACK</span>'
+        : '<span class="tooltip-badge badge-off">○ STANDBY / DORMANT</span>';
+
+      html += `
+        <div class="brain-pill ${activeClass}" data-pill-id="${escapeHtml(pill.id)}">
+          <span class="pill-dot">${pill.active ? '●' : '○'}</span>
+          <span class="pill-name">${escapeHtml(pill.name)}</span>
+          <div class="brain-tooltip">
+            <div class="tooltip-head">
+              <span class="tooltip-title">${pill.icon} ${escapeHtml(pill.name)}</span>
+              ${statusBadge}
+            </div>
+            <div class="tooltip-desc">${escapeHtml(pill.description)}</div>
+            <div class="tooltip-telemetry ${pill.active ? 'is-active' : ''}">
+              ${escapeHtml(pill.telemetry || (pill.active ? 'Active module' : 'Dormant'))}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    html += `
+        </div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+}
+
 function updateDashboard(state) {
   setSyncStatus('live');
   currentState = state;
@@ -274,6 +402,9 @@ function updateDashboard(state) {
 
   // Update live waveform cues & transition timer
   updateWaveformCues();
+
+  // Update Brain Matrix Neural Stack
+  renderBrainMatrix(state.brainPills, state.track);
 }
 
 function updateProgress(elapsed, total) {

@@ -1524,6 +1524,331 @@
     }
 
     /* ========================================================
+       BRAIN MATRIX • NEURAL EXECUTION STACK (LEVEL 2)
+       ======================================================== */
+    .brains-matrix-card {
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 16px 18px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .brains-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .brains-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brains-icon {
+      font-size: 20px;
+    }
+
+    .brains-title {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: #f8fafc;
+    }
+
+    .brains-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 1px;
+    }
+
+    .brains-active-badge {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #34d399;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 3px 10px;
+      border-radius: 999px;
+      letter-spacing: 0.5px;
+      transition: all 0.2s ease;
+    }
+
+    .brains-pills-container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .brains-category-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .brains-category-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #64748b;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .brains-category-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .brain-pill {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+      user-select: none;
+    }
+
+    /* Dormant / Inactive Pill */
+    .brain-pill.is-off {
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      color: #64748b;
+      opacity: 0.45;
+    }
+
+    .brain-pill.is-off:hover {
+      opacity: 0.95;
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.18);
+      color: #cbd5e1;
+      transform: translateY(-1px);
+    }
+
+    .brain-pill.is-off .pill-dot {
+      color: #475569;
+      font-size: 9px;
+    }
+
+    /* Active / Lit Pill */
+    .brain-pill.is-active {
+      opacity: 1;
+      font-weight: 700;
+      color: #ffffff;
+      transform: translateY(0);
+    }
+
+    .brain-pill.is-active:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.15);
+    }
+
+    .brain-pill.is-active .pill-dot {
+      font-size: 9px;
+      animation: pulseDot 2s infinite ease-in-out;
+    }
+
+    /* Category color variants when active */
+    .brain-pill.is-active.cat-engine {
+      background: rgba(168, 85, 247, 0.18);
+      border: 1px solid rgba(168, 85, 247, 0.45);
+      box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);
+    }
+    .brain-pill.is-active.cat-engine .pill-dot {
+      color: #c084fc;
+      text-shadow: 0 0 6px #c084fc;
+    }
+
+    .brain-pill.is-active.cat-harmonic {
+      background: rgba(16, 185, 129, 0.18);
+      border: 1px solid rgba(16, 185, 129, 0.45);
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
+    }
+    .brain-pill.is-active.cat-harmonic .pill-dot {
+      color: #34d399;
+      text-shadow: 0 0 6px #34d399;
+    }
+
+    .brain-pill.is-active.cat-consensus {
+      background: rgba(6, 182, 212, 0.18);
+      border: 1px solid rgba(6, 182, 212, 0.45);
+      box-shadow: 0 0 10px rgba(6, 182, 212, 0.25);
+    }
+    .brain-pill.is-active.cat-consensus .pill-dot {
+      color: #38bdf8;
+      text-shadow: 0 0 6px #38bdf8;
+    }
+
+    .brain-pill.is-active.cat-purity {
+      background: rgba(245, 158, 11, 0.18);
+      border: 1px solid rgba(245, 158, 11, 0.45);
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);
+    }
+    .brain-pill.is-active.cat-purity .pill-dot {
+      color: #fbbf24;
+      text-shadow: 0 0 6px #fbbf24;
+    }
+
+    .brain-pill.is-active.cat-muscle {
+      background: rgba(244, 63, 94, 0.18);
+      border: 1px solid rgba(244, 63, 94, 0.45);
+      box-shadow: 0 0 10px rgba(244, 63, 94, 0.25);
+    }
+    .brain-pill.is-active.cat-muscle .pill-dot {
+      color: #fb7185;
+      text-shadow: 0 0 6px #fb7185;
+    }
+
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.2); }
+    }
+
+    /* Tooltip Popover */
+    .brain-tooltip {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: 290px;
+      background: #090d16;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 10px;
+      padding: 12px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      z-index: 1000;
+      text-align: left;
+      backdrop-filter: blur(20px);
+    }
+
+    .brain-tooltip::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border-width: 6px;
+      border-style: solid;
+      border-color: #090d16 transparent transparent transparent;
+    }
+
+    .brain-pill:hover .brain-tooltip {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(-50%) translateY(-2px);
+    }
+
+    /* Edge alignment so tooltips never clip off-screen */
+    .brains-category-pills .brain-pill:first-child .brain-tooltip,
+    .brains-category-pills .brain-pill:nth-child(2) .brain-tooltip {
+      left: 0;
+      transform: none;
+    }
+    .brains-category-pills .brain-pill:first-child .brain-tooltip::after,
+    .brains-category-pills .brain-pill:nth-child(2) .brain-tooltip::after {
+      left: 24px;
+      transform: none;
+    }
+
+    .brains-category-pills .brain-pill:last-child .brain-tooltip {
+      left: auto;
+      right: 0;
+      transform: none;
+    }
+    .brains-category-pills .brain-pill:last-child .brain-tooltip::after {
+      left: auto;
+      right: 24px;
+      transform: none;
+    }
+
+    .tooltip-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .tooltip-title {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.4px;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .tooltip-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .tooltip-badge.badge-active {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+    }
+
+    .tooltip-badge.badge-off {
+      background: rgba(255, 255, 255, 0.06);
+      color: #94a3b8;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .tooltip-desc {
+      font-size: 11px;
+      color: #cbd5e1;
+      line-height: 1.45;
+      margin-bottom: 8px;
+    }
+
+    .tooltip-telemetry {
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      background: rgba(0, 0, 0, 0.45);
+      border-radius: 6px;
+      padding: 6px 8px;
+      border-left: 2px solid #64748b;
+      color: #94a3b8;
+      line-height: 1.4;
+    }
+
+    .tooltip-telemetry.is-active {
+      border-left-color: #34d399;
+      color: #a7f3d0;
+      background: rgba(16, 185, 129, 0.08);
+    }
+
+    /* ========================================================
        6-AXIS TASTE RADAR CHART CARD (LEVEL 3)
        ======================================================== */
     .taste-chart-card {
@@ -1916,6 +2241,26 @@
             <button class="btn btn-icon" onclick="triggerAction('skip')" title="Skip Track">⏭️</button>
             <button class="btn btn-icon" onclick="triggerAction('dislike')" title="Dislike Track">💔</button>
             <button class="btn btn-icon btn-danger" onclick="vetoCurrentlyPlaying()" title="Veto Artist & Skip">🚫</button>
+          </div>
+
+          <!-- Dedicated Brains Matrix Slot -->
+          <div id="brains-matrix-slot" class="brains-matrix-card">
+            <div class="brains-header">
+              <div class="brains-title-group">
+                <span class="brains-icon">🧠</span>
+                <div>
+                  <div class="brains-title">Brain Matrix • Neural Execution Stack</div>
+                  <div class="brains-subtitle">Hover any module for algorithmic explanation & live track telemetry</div>
+                </div>
+              </div>
+              <div class="brains-badge-wrap">
+                <span id="brains-active-count" class="brains-active-badge">-- / 24 ACTIVE</span>
+              </div>
+            </div>
+
+            <div id="brains-pills-container" class="brains-pills-container">
+              <!-- Dynamically populated via renderBrainMatrix() in app.js -->
+            </div>
           </div>
 
           <!-- VLC Broadcast Relay -->

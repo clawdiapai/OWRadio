@@ -152,7 +152,7 @@ class HarmonicMixingService {
    * 2. Adjacent on wheel (+1 or -1 position, same letter: 7A or 9A)
    * 3. Relative major/minor flip (same number, different letter: 8A <-> 8B)
    */
-  private isKeyCompatible(keyA: string, keyB: string): boolean {
+  public isKeyCompatible(keyA: string, keyB: string): boolean {
     if (keyA === keyB) return true;
 
     const numA = parseInt(keyA.slice(0, -1), 10);

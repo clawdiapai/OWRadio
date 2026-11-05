@@ -32,6 +32,7 @@ import vault from '../services/vault.js';
 import vetoService from '../services/vetoService.js';
 import dynamicSettings from '../services/dynamicSettings.js';
 import tasteRadarChart from '../services/tasteRadarChart.js';
+import brainMatrix, { type BrainPillPayload } from '../services/brainMatrix.js';
 import { getTrackDedupeKey, isDuplicateTrack, normalizeArtist } from '../utils/trackDedupe.js';
 
 export interface PlayerStatePayload {
@@ -48,6 +49,9 @@ export interface PlayerStatePayload {
   timeCapsuleYear?: number | null;
   morph?: ReturnType<typeof stationCurator['getMorphState']>;
   audioMeter?: { rms: number; peak: number; bands: number[] };
+  brainPills?: BrainPillPayload[];
+  activeBrainCount?: number;
+  totalBrainCount?: number;
 }
 
 export class GuildPlayer extends EventEmitter {
@@ -58,6 +62,8 @@ export class GuildPlayer extends EventEmitter {
 
   private queue: AudioTrack[] = [];
   public currentTrack: AudioTrack | null = null;
+  public previousTrack: AudioTrack | null = null;
+  public lastTransitionAnalysis: any | null = null;
   public isPaused = false;
   private volume = 80; // 0 - 100%
   public autoplayEnabled = true;
@@ -354,6 +360,9 @@ export class GuildPlayer extends EventEmitter {
     this.broadcastTee.on('trackCrossfadeStart', () => {
       console.log(`[GuildPlayer] Crossfade started for incoming track "${this.pendingTrack?.title}"`);
       if (this.pendingTrack) {
+        if (this.currentTrack && this.currentTrack.id !== this.pendingTrack.id) {
+          this.previousTrack = this.currentTrack;
+        }
         this.currentTrack = this.pendingTrack;
         this.pendingTrack = null;
         this.currentTrack.startedAtUnix = Math.floor(Date.now() / 1000);
@@ -866,6 +875,9 @@ export class GuildPlayer extends EventEmitter {
       }
 
       const nextTrack = this.queue.shift()!;
+      if (this.currentTrack && this.currentTrack.id !== nextTrack.id) {
+        this.previousTrack = this.currentTrack;
+      }
       this.currentTrack = nextTrack;
       this.pendingTrack = null;
       this.isTransitioning = false;
@@ -955,6 +967,7 @@ export class GuildPlayer extends EventEmitter {
         console.log(`[GuildPlayer] ⏭️ User skip: executing ${skipSec}s (${customFadeFrames} frames) crossfade`);
       } else if (this.currentTrack && featureFlags.isEnabled('feature_harmonic_crossfade')) {
         const analysis = harmonicMixing.evaluateTransition(this.currentTrack, nextTrack);
+        this.lastTransitionAnalysis = analysis;
         customFadeFrames = analysis.crossfadeFrames;
         console.log(`[GuildPlayer] 🎚️ Harmonic mixing: ${analysis.reason}`);
       }
@@ -1065,6 +1078,9 @@ export class GuildPlayer extends EventEmitter {
 
       // Pop next track immediately to advance state and UI
       const nextTrack = this.queue.shift()!;
+      if (this.currentTrack && this.currentTrack.id !== nextTrack.id) {
+        this.previousTrack = this.currentTrack;
+      }
       this.currentTrack = nextTrack;
       this.currentTrack.startedAtUnix = Math.floor(Date.now() / 1000);
       this.updateVoiceChannelStatus(this.currentTrack);
@@ -1425,6 +1441,13 @@ export class GuildPlayer extends EventEmitter {
       : 0;
 
     const upNextTrack = this.pendingTrack || this.queue[0];
+    const brainPills = brainMatrix.computeBrainPills(
+      this.currentTrack,
+      this.previousTrack,
+      this.lastTransitionAnalysis,
+      this.getActiveListenerNames().length
+    );
+    const activeBrainCount = brainPills.filter((p) => p.active).length;
 
     return {
       state: this.currentTrack ? (this.isPaused ? 'paused' : 'playing') : 'idle',
@@ -1447,6 +1470,9 @@ export class GuildPlayer extends EventEmitter {
       timeCapsuleYear: stationCurator.getTimeCapsuleYear(),
       morph: stationCurator.getMorphState(),
       audioMeter: this.broadcastTee.getLiveAudioMeter(),
+      brainPills,
+      activeBrainCount,
+      totalBrainCount: brainPills.length,
     };
   }
 
