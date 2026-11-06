@@ -796,7 +796,7 @@ export function createWebServer(player: GuildPlayer) {
 
     let modelName = config.OLLAMA_MODEL;
     if (activeEngine === 'embedding') modelName = 'all-minilm (Dense Vector)';
-    if (activeEngine === 'jev') modelName = `${config.OLLAMA_MODEL} (Jev Decision Head)`;
+    if (activeEngine === 'jev') modelName = `${config.OLLAMA_MODEL} (Ranked-Choice LLM)`;
 
     return c.json({
       success: true,
@@ -866,7 +866,7 @@ export function createWebServer(player: GuildPlayer) {
       album: player.currentTrack.album,
       durationSec: player.currentTrack.durationSec,
     } : null;
-    const tasteFingerprint = tasteRadarChart.getRoomFingerprint(activeUserIds, currentTrackSummary);
+    const tasteFingerprint = tasteRadarChart.getRoomFingerprint(activeUserIds, currentTrackSummary, player.broadcastTee.getLiveAudioMeter().rms);
 
     return c.json({
       flags,
@@ -1034,7 +1034,7 @@ export function createWebServer(player: GuildPlayer) {
       album: player.currentTrack.album,
       durationSec: player.currentTrack.durationSec,
     } : null;
-    const fingerprint = tasteRadarChart.getRoomFingerprint(activeUserIds, currentTrackSummary);
+    const fingerprint = tasteRadarChart.getRoomFingerprint(activeUserIds, currentTrackSummary, player.broadcastTee.getLiveAudioMeter().rms);
     return c.json(fingerprint);
   });
 
@@ -1093,7 +1093,7 @@ export function createWebServer(player: GuildPlayer) {
       album: player.currentTrack.album,
       durationSec: player.currentTrack.durationSec,
     } : null;
-    const fingerprint = tasteRadarChart.getRoomFingerprint(activeUserIds, currentTrackSummary);
+    const fingerprint = tasteRadarChart.getRoomFingerprint(activeUserIds, currentTrackSummary, player.broadcastTee.getLiveAudioMeter().rms);
     return c.json(fingerprint);
   });
 

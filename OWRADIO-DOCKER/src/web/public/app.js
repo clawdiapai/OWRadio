@@ -197,8 +197,8 @@ let lastRenderedBrainTrackId = undefined;
 let lastRenderedBrainActiveCount = -1;
 
 const DEFAULT_BRAIN_PILLS = [
-  { id: 'jev_decision', name: 'Jev Decision Engine', category: 'engine', categoryLabel: 'Decision Engines', icon: '🎯', tag: 'DECISION', description: 'Discriminative multi-candidate ranking model scoring tracks by listener affinity overlap and freshness decay.', defaultOffTelemetry: 'Dormant: Station running in Hybrid JIT mode; Jev ranker not engaged.' },
-  { id: 'vector_latent', name: 'Vector Latent JEPA', category: 'engine', categoryLabel: 'Decision Engines', icon: '⚡', tag: 'LATENT', description: '384-dimensional cosine similarity matching in RAM embedding space finding nearest acoustic neighbors to the room centroid.', defaultOffTelemetry: 'Dormant: Latent vector cosine space on standby; track resolved via collaborative open graph.' },
+  { id: 'jev_decision', name: 'Ranked-Choice LLM', category: 'engine', categoryLabel: 'Decision Engines', icon: '🎯', tag: 'RANKED-LLM', description: 'Prompts local Qwen 1.5B with candidate slates to select the single winning option token without conversational overhead.', defaultOffTelemetry: 'Dormant: Station running in Hybrid JIT mode; ranked-choice LLM selector on standby.' },
+  { id: 'vector_latent', name: 'Dense Vector Retrieval', category: 'engine', categoryLabel: 'Decision Engines', icon: '⚡', tag: 'VECTOR-384', description: '384-dimensional semantic cosine similarity matching in RAM embedding space finding nearest neighbors to room centroid via all-minilm.', defaultOffTelemetry: 'Dormant: Semantic vector cosine space on standby; track resolved via collaborative open graph.' },
   { id: 'hybrid_jit', name: 'Hybrid JIT Graph', category: 'engine', categoryLabel: 'Decision Engines', icon: '🔀', tag: 'JIT-GRAPH', description: 'Real-time 300ms traversal of Deezer & Last.fm 100M+ open collaborative music graphs, completely bypassing static database scraping.', defaultOffTelemetry: 'Dormant: Collaborative graph not selected for this cut.' },
   { id: 'qwen_llm', name: 'Qwen 1.5B Local LLM', category: 'engine', categoryLabel: 'Decision Engines', icon: '🤖', tag: 'NEURAL-LLM', description: 'Local compact 1.5B parameter neural language model running locally (clamped to 2 CPU threads), translating human vibes and listener affinities into curated picks.', defaultOffTelemetry: 'Dormant: Local LLM inference idle; track curated without language model tokens.' },
   { id: 'anchor_20', name: '20% Core Anchor', category: 'engine', categoryLabel: 'Decision Engines', icon: '⚓', tag: 'ANTI-ECHO', description: '1st Anti-Echo shield: plays verified comfort favorites and cornerstone tracks directly from active listeners’ seeds.', defaultOffTelemetry: 'Dormant: Random roll bypassed core anchor slice in favor of deep-cut exploration.' },
@@ -931,7 +931,7 @@ async function fetchBrainData() {
         modelEl.style.color = '#38bdf8';
         if (threadsEl) threadsEl.innerText = `all-minilm (384-d | ${data.indexedVectorsCount || 9587} vectors)`;
       } else if (activeEngine === 'jev') {
-        modelEl.innerHTML = '🎯 Jev Decision Engine';
+        modelEl.innerHTML = '🎯 Ranked-Choice LLM (Qwen 1.5B)';
         modelEl.style.color = '#fbbf24';
         if (threadsEl) threadsEl.innerText = `${data.model || 'qwen2.5'} (Calibrated SemIf Logit Pass)`;
       } else if (activeEngine === 'llm') {
@@ -941,7 +941,7 @@ async function fetchBrainData() {
       } else {
         modelEl.innerHTML = `🔀 Hybrid Blend`;
         modelEl.style.color = '#34d399';
-        if (threadsEl) threadsEl.innerText = `Dense Latent + Jev Decision + Generative`;
+        if (threadsEl) threadsEl.innerText = `Dense Vector (MiniLM) + Ranked LLM + Generative`;
       }
     }
 
@@ -1073,7 +1073,7 @@ function renderBrainInteractions() {
     if (it.action === 'taste_radar') {
       actionBadge = `<span class="badge-tag" style="background: rgba(56, 189, 248, 0.25); color: #38bdf8;">🛰️ TASTE RADAR EXPANSION</span>`;
     } else if (it.action === 'jev_decision') {
-      actionBadge = `<span class="badge-tag" style="background: rgba(245, 158, 11, 0.25); color: #fbbf24;">🎯 JEV DECISION ENGINE</span>`;
+      actionBadge = `<span class="badge-tag" style="background: rgba(245, 158, 11, 0.25); color: #fbbf24;">🎯 RANKED-CHOICE LLM</span>`;
     } else if (it.action === 'vector_curation') {
       actionBadge = `<span class="badge-tag" style="background: rgba(56, 189, 248, 0.25); color: #38bdf8;">⚡ VECTOR LATENT</span>`;
     } else if (it.action === 'curation') {
@@ -1571,9 +1571,9 @@ async function switchCurationEngine(engine) {
     if (data.success) {
       const descriptions = {
         embedding: '⚡ Vector Latent: Ultra-fast dense metric dot product, zero hallucination.',
-        jev: '🎯 Jev Decision Engine: "System One" discriminative candidate scoring in a single forward pass.',
+        jev: '🎯 Ranked-Choice LLM: Single-token candidate selection scored against room preferences.',
         llm: '🤖 Autoregressive LLM: Multi-factor token prompt reasoning via local Ollama.',
-        hybrid: '🔀 Hybrid Blend: Dense latent retrieval combined with Jev decision rankings.',
+        hybrid: '🔀 Hybrid Blend: Dense vector retrieval combined with ranked-choice LLM selection.',
       };
       showToast(descriptions[engine] || `Engine switched to ${engine}`, 'success');
       await fetchBrainData();
@@ -2055,37 +2055,6 @@ const STANDARD_KEY_MAP = {
   'c#m': '12A', 'dbm': '12A', 'e': '12B',
 };
 
-function stringHash(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
-  }
-  return hash;
-}
-
-function estimateTrackBpm(title, artist) {
-  const t = (title || '').toLowerCase();
-  const a = (artist || '').toLowerCase();
-  const hash = stringHash(`${t}::${a}`);
-  return 95 + (Math.abs(hash) % 40); // 95 - 134 bpm
-}
-
-function estimateTrackKey(title, artist) {
-  const t = (title || '').toLowerCase();
-  const a = (artist || '').toLowerCase();
-  const hash = stringHash(`${a} - ${t}`);
-  const camelot = CAMELOT_KEYS[Math.abs(hash) % CAMELOT_KEYS.length];
-  let keyName = camelot;
-  for (const [name, cam] of Object.entries(STANDARD_KEY_MAP)) {
-    if (cam === camelot) {
-      keyName = name.toUpperCase();
-      break;
-    }
-  }
-  return { camelot, key: keyName };
-}
-
 function updateWaveformCues() {
   const bpmTag = document.getElementById('waveform-bpm-tag');
   const keyTag = document.getElementById('waveform-key-tag');
@@ -2095,7 +2064,7 @@ function updateWaveformCues() {
   if (!currentState || !currentState.track) {
     if (bpmTag) bpmTag.innerText = 'BPM: --';
     if (keyTag) keyTag.innerText = 'Key: --';
-    if (dropTag) dropTag.innerText = 'Drop / Cue: --';
+    if (dropTag) dropTag.innerText = 'Transition Cue: --';
     if (cueBadge) {
       cueBadge.innerText = 'IDLE';
       cueBadge.style.color = '#94a3b8';
@@ -2107,36 +2076,39 @@ function updateWaveformCues() {
   const t = currentState.track;
   const remaining = Math.max(0, (t.durationSec || 0) - (t.elapsedSec || 0));
 
-  const bpm = t.bpm || estimateTrackBpm(t.title, t.artist);
-  const keyInfo = (t.camelot && t.key)
-    ? { camelot: t.camelot, key: t.key }
-    : (t.camelot ? { camelot: t.camelot, key: t.camelot } : estimateTrackKey(t.title, t.artist));
-
-  if (bpmTag) bpmTag.innerText = `BPM: ~${bpm}`;
-  if (keyTag) {
-    const keyDisplay = keyInfo.key && keyInfo.key !== keyInfo.camelot
-      ? `${keyInfo.key} (${keyInfo.camelot})`
-      : (keyInfo.camelot || '--');
-    keyTag.innerText = `Key: ${keyDisplay}`;
+  if (bpmTag) {
+    bpmTag.innerText = t.bpm ? `BPM: ~${t.bpm}` : 'BPM: --';
   }
 
-  if (remaining <= 8 && remaining > 0) {
-    if (dropTag) dropTag.innerText = `Drop / Cue: in ${Math.ceil(remaining)}s`;
-    if (cueBadge) {
-      cueBadge.innerText = '⚡ CROSSFADE CUE';
-      cueBadge.style.color = '#ec4899';
-      cueBadge.style.borderColor = 'rgba(236, 72, 153, 0.5)';
+  if (keyTag) {
+    if (t.camelot && t.key && t.camelot !== t.key) {
+      keyTag.innerText = `Key: ${t.key} (${t.camelot})`;
+    } else if (t.camelot || t.key) {
+      keyTag.innerText = `Key: ${t.camelot || t.key}`;
+    } else {
+      keyTag.innerText = 'Key: --';
     }
-  } else if (remaining > 8) {
-    const dropIn = Math.max(0, remaining - 8);
-    if (dropTag) dropTag.innerText = `Drop / Cue: in ${formatTime(dropIn)}`;
+  }
+
+  const transitionSec = 8;
+  if (remaining <= transitionSec && remaining > 0) {
+    if (dropTag) dropTag.innerText = `Transition Cue: in ${Math.ceil(remaining)}s`;
     if (cueBadge) {
-      cueBadge.innerText = 'HARMONIC MIX READY';
+      const isHarmonic = currentState.lastTransitionAnalysis && currentState.lastTransitionAnalysis.isHarmonicMatch;
+      cueBadge.innerText = isHarmonic ? '⚡ HARMONIC CROSSFADE' : '⚡ CROSSFADE CUE';
+      cueBadge.style.color = isHarmonic ? '#38bdf8' : '#ec4899';
+      cueBadge.style.borderColor = isHarmonic ? 'rgba(56, 189, 248, 0.5)' : 'rgba(236, 72, 153, 0.5)';
+    }
+  } else if (remaining > transitionSec) {
+    const cueIn = remaining - transitionSec;
+    if (dropTag) dropTag.innerText = `Transition Cue: in ${formatTime(Math.max(0, cueIn))}`;
+    if (cueBadge) {
+      cueBadge.innerText = 'LIVE BROADCAST';
       cueBadge.style.color = '#38bdf8';
       cueBadge.style.borderColor = 'rgba(56, 189, 248, 0.3)';
     }
   } else {
-    if (dropTag) dropTag.innerText = 'Drop / Cue: 0:00';
+    if (dropTag) dropTag.innerText = 'Transition Cue: 0:00';
   }
 }
 

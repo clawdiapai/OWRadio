@@ -112,6 +112,38 @@ export const FEATURE_DEFINITIONS: FeatureFlagDefinition[] = [
     defaultValue: true,
     icon: '📻',
   },
+  {
+    id: 'feature_pcm_dsp_analysis',
+    name: 'PCM Audio DSP Analysis (BPM & Key)',
+    description: 'In-process PCM autocorrelation BPM detector & Chromagram Camelot key finder. Turn off to completely disable CPU audio analysis.',
+    category: 'Audio & Mixing',
+    defaultValue: true,
+    icon: '🎵',
+  },
+  {
+    id: 'feature_ebu_loudnorm',
+    name: 'EBU R128 Loudness Normalization',
+    description: 'Real-time broadcast loudness normalization (-14 LUFS) in ffmpeg. Turn off if ffmpeg CPU needs to be minimized.',
+    category: 'Audio & Mixing',
+    defaultValue: true,
+    icon: '🔊',
+  },
+  {
+    id: 'feature_ram_standby_prewarm',
+    name: 'RAM Standby Deck Prewarming',
+    description: 'Pre-buffers upcoming queue tracks into memory for zero-gap transitions. Turn off to save RAM.',
+    category: 'Audio & Mixing',
+    defaultValue: true,
+    icon: '⚡',
+  },
+  {
+    id: 'feature_live_pcm_energy',
+    name: 'Taste Radar Live Audio Energy',
+    description: 'Feeds real-time PCM audio RMS into Taste Radar dynamic drive. Turn off to fallback to static genre weighting.',
+    category: 'Audio & Mixing',
+    defaultValue: true,
+    icon: '🔥',
+  },
 ];
 
 class FeatureFlagsService extends EventEmitter {

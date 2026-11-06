@@ -92,7 +92,9 @@ export class GuildPlayer extends EventEmitter {
             const resolved = await streamResolver.resolveStream(track);
             if (resolved) {
               track.streamUrl = resolved.streamUrl;
-              if (resolved.source === 'deezer') {
+          track.isTopicChannel = resolved.isTopicChannel;
+          track.durationDeltaSec = resolved.durationDeltaSec;
+          if (resolved.source === 'deezer') {
                 track.durationSec = resolved.durationSec;
               }
             }
@@ -357,6 +359,28 @@ export class GuildPlayer extends EventEmitter {
       this.trackPlayStartTime = Date.now();
     });
 
+    this.broadcastTee.on('trackAnalyzed', (analysis: { streamUrl?: string; bpm?: number; key?: string; camelot?: string }) => {
+      if (this.currentTrack) {
+        let changed = false;
+        if (analysis.bpm && (!this.currentTrack.bpm || this.currentTrack.bpm !== analysis.bpm)) {
+          this.currentTrack.bpm = analysis.bpm;
+          changed = true;
+        }
+        if (analysis.key && (!this.currentTrack.key || this.currentTrack.key !== analysis.key)) {
+          this.currentTrack.key = analysis.key;
+          changed = true;
+        }
+        if (analysis.camelot && (!this.currentTrack.camelot || this.currentTrack.camelot !== analysis.camelot)) {
+          this.currentTrack.camelot = analysis.camelot;
+          changed = true;
+        }
+        if (changed) {
+          console.log(`[GuildPlayer] 🎵 Track "${this.currentTrack.title}" updated with genuine DSP: ${this.currentTrack.bpm} BPM | ${this.currentTrack.key} (${this.currentTrack.camelot})`);
+          this.emitStateChange();
+        }
+      }
+    });
+
     this.broadcastTee.on('trackCrossfadeStart', () => {
       console.log(`[GuildPlayer] Crossfade started for incoming track "${this.pendingTrack?.title}"`);
       if (this.pendingTrack) {
@@ -610,7 +634,9 @@ export class GuildPlayer extends EventEmitter {
           const resolved = await streamResolver.resolveStream(track);
           if (resolved) {
             track.streamUrl = resolved.streamUrl;
-            if (resolved.source === 'deezer') {
+          track.isTopicChannel = resolved.isTopicChannel;
+          track.durationDeltaSec = resolved.durationDeltaSec;
+          if (resolved.source === 'deezer') {
               track.durationSec = resolved.durationSec;
             }
           }
@@ -688,6 +714,8 @@ export class GuildPlayer extends EventEmitter {
         const resolved = await streamResolver.resolveStream(track);
         if (resolved) {
           track.streamUrl = resolved.streamUrl;
+          track.isTopicChannel = resolved.isTopicChannel;
+          track.durationDeltaSec = resolved.durationDeltaSec;
           if (resolved.source === 'deezer') {
             track.durationSec = resolved.durationSec;
           }
@@ -893,6 +921,8 @@ export class GuildPlayer extends EventEmitter {
           return;
         }
         nextTrack.streamUrl = resolved.streamUrl;
+        nextTrack.isTopicChannel = resolved.isTopicChannel;
+        nextTrack.durationDeltaSec = resolved.durationDeltaSec;
         if (resolved.source === 'deezer') {
           nextTrack.durationSec = resolved.durationSec;
           console.log(`[GuildPlayer] Playing 30-second Deezer preview for "${nextTrack.title}" (full stream unavailable)`);
@@ -954,6 +984,8 @@ export class GuildPlayer extends EventEmitter {
           return;
         }
         nextTrack.streamUrl = resolved.streamUrl;
+        nextTrack.isTopicChannel = resolved.isTopicChannel;
+        nextTrack.durationDeltaSec = resolved.durationDeltaSec;
         if (resolved.source === 'deezer') {
           nextTrack.durationSec = resolved.durationSec;
         }
@@ -1008,7 +1040,9 @@ export class GuildPlayer extends EventEmitter {
           return;
         }
         track.streamUrl = resolved.streamUrl;
-        if (resolved.source === 'deezer') {
+          track.isTopicChannel = resolved.isTopicChannel;
+          track.durationDeltaSec = resolved.durationDeltaSec;
+          if (resolved.source === 'deezer') {
           track.durationSec = resolved.durationSec;
         }
       }
@@ -1445,7 +1479,8 @@ export class GuildPlayer extends EventEmitter {
       this.currentTrack,
       this.previousTrack,
       this.lastTransitionAnalysis,
-      this.getActiveListenerNames().length
+      this.getActiveListenerNames().length,
+      this.broadcastTee.getStandbyStats()
     );
     const activeBrainCount = brainPills.filter((p) => p.active).length;
 

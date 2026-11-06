@@ -23,7 +23,9 @@ export interface ResolvedStream {
   youtubeId: string;
   streamUrl: string;
   durationSec: number;
-  source: 'cache' | 'ytdlp' | 'deezer';
+  source: 'cache' | 'ytdlp' | 'deezer' | 'soundcloud';
+  isTopicChannel?: boolean;
+  durationDeltaSec?: number;
 }
 
 interface YtDlpCandidate {
@@ -232,10 +234,7 @@ export async function resolveStream(
 
       return {
         songId: track.id,
-        youtubeId: videoId,
-        streamUrl: watchUrl,
-        durationSec: track.durationSec,
-        source: 'ytdlp',
+        youtubeId: videoId, streamUrl: watchUrl, durationSec: track.durationSec, source: 'ytdlp', isTopicChannel: false, durationDeltaSec: 0,
       };
     }
   }
@@ -427,12 +426,16 @@ export async function resolveStream(
       }
 
       console.log(`[StreamResolver] Resolved "${track.title}" via YouTube candidate ${best.id} ("${best.title}")`);
+      const bestDiff = best.duration ? Math.abs(best.duration - track.durationSec) : 0;
+      const isTopicBest = (best.uploader || '').toLowerCase().includes('- topic') || (best.title || '').toLowerCase().includes('- topic');
       return {
         songId: track.id,
         youtubeId: best.id,
         streamUrl: watchUrl,
         durationSec: best.duration || track.durationSec,
         source: 'ytdlp',
+        isTopicChannel: isTopicBest,
+        durationDeltaSec: bestDiff,
       };
     }
   }
@@ -538,8 +541,7 @@ export async function resolveSoundCloudStream(
             songId: track.id,
             youtubeId: 'soundcloud',
             streamUrl: scUrl,
-            durationSec: scCandidate.duration || track.durationSec,
-            source: 'ytdlp',
+            durationSec: scCandidate.duration || track.durationSec, source: 'soundcloud', isTopicChannel: false, durationDeltaSec: Math.round(scCandidate.diff),
           };
         }
       } catch {
@@ -594,8 +596,7 @@ export async function resolveFallbackStream(
         songId: track.id,
         youtubeId: altCandidate.videoId,
         streamUrl: `https://www.youtube.com/watch?v=${altCandidate.videoId}`,
-        durationSec: altCandidate.durationSec || track.durationSec,
-        source: 'ytdlp',
+        durationSec: altCandidate.durationSec || track.durationSec, source: 'ytdlp', isTopicChannel: (altCandidate.artist || '').toLowerCase().includes('- topic'), durationDeltaSec: altCandidate.durationSec ? Math.abs(altCandidate.durationSec - track.durationSec) : 0,
       };
     }
   } catch (err) {

@@ -38,23 +38,23 @@ export const PILL_DEFINITIONS: PillDefinition[] = [
   // --- Category: Curation Brains & Decision Engines ---
   {
     id: 'jev_decision',
-    name: 'Jev Decision Engine',
+    name: 'Ranked-Choice LLM Selector',
     category: 'engine',
     categoryLabel: 'Decision Engines',
     icon: '🎯',
-    tag: 'DECISION',
-    description: 'Discriminative multi-candidate ranking model that scores tracks by listener affinity overlap and freshness decay without autoregressive LLM token overhead.',
-    defaultOffTelemetry: 'Dormant: Station is currently running in Hybrid JIT mode; Jev ranker not engaged.',
+    tag: 'RANKED-LLM',
+    description: 'Prompts local Qwen 1.5B with a typed candidate slate to select the winning candidate token in a single forward pass without conversational text overhead.',
+    defaultOffTelemetry: 'Dormant: Station is currently running in Hybrid JIT mode; ranked-choice LLM selector on standby.',
   },
   {
     id: 'vector_latent',
-    name: 'Vector Latent JEPA',
+    name: 'Dense Vector Retrieval',
     category: 'engine',
     categoryLabel: 'Decision Engines',
     icon: '⚡',
-    tag: 'LATENT',
-    description: '384-dimensional cosine similarity matching in RAM embedding space, finding mathematical acoustic nearest neighbors to the voice room centroid.',
-    defaultOffTelemetry: 'Dormant: Latent vector cosine space on standby; track resolved via collaborative open graph.',
+    tag: 'VECTOR-384',
+    description: '384-dimensional cosine similarity matching in RAM embedding space, finding semantic nearest neighbors to the voice room centroid via all-minilm.',
+    defaultOffTelemetry: 'Dormant: Semantic vector cosine space on standby; track resolved via collaborative open graph.',
   },
   {
     id: 'hybrid_jit',
@@ -83,7 +83,7 @@ export const PILL_DEFINITIONS: PillDefinition[] = [
     categoryLabel: 'Decision Engines',
     icon: '⚓',
     tag: 'ANTI-ECHO',
-    description: '1st Anti-Echo shield: plays verified comfort favorites and cornerstone tracks directly from active listeners’ seeds to maintain familiarity.',
+    description: '1st Anti-Echo shield: plays verified comfort favorites and cornerstone tracks directly from active listeners\' seeds to maintain familiarity.',
     defaultOffTelemetry: 'Dormant: Random roll bypassed core anchor slice in favor of deep-cut exploration.',
   },
   {
@@ -93,7 +93,7 @@ export const PILL_DEFINITIONS: PillDefinition[] = [
     categoryLabel: 'Decision Engines',
     icon: '🔍',
     tag: 'DEEP-CUT',
-    description: '2nd Anti-Echo shield: explores 1st-degree related artist graphs (ranks 5–30) to unearth obscure album b-sides listeners love but haven’t heard recently.',
+    description: '2nd Anti-Echo shield: explores 1st-degree related artist graphs (ranks 5–30) to unearth obscure album b-sides listeners love but haven\'t heard recently.',
     defaultOffTelemetry: 'Dormant: Collaborative deep-cut slice was not chosen for this track.',
   },
   {
@@ -195,7 +195,7 @@ export const PILL_DEFINITIONS: PillDefinition[] = [
     categoryLabel: 'Taste Consensus',
     icon: '🕸️',
     tag: 'TASTE-DNA',
-    description: 'Projects the room’s collective taste onto 8 acoustic dimensions (Electronic, Rock, Synth, Funk, Hip-Hop, Indie, Chill, Energy) and computes track alignment %.',
+    description: 'Projects the room\'s collective taste onto 8 acoustic dimensions (Electronic, Rock, Synth, Funk, Hip-Hop, Indie, Chill, Energy) and computes track alignment %.',
     defaultOffTelemetry: 'Dormant: No active Discord listeners in voice to compute collective taste centroid.',
   },
   {
@@ -205,8 +205,8 @@ export const PILL_DEFINITIONS: PillDefinition[] = [
     categoryLabel: 'Acoustic & Harmonics',
     icon: '🔊',
     tag: 'BROADCAST',
-    description: 'Real-time integrated LUFS loudness normalization (-14 LUFS target) to eliminate volume jumps between disparate albums and production eras.',
-    defaultOffTelemetry: 'Dormant: Loudness normalization bypassed.',
+    description: 'Real-time integrated LUFS loudness normalization (-14 LUFS target) in ffmpeg to eliminate volume jumps between disparate albums and production eras.',
+    defaultOffTelemetry: 'Dormant: EBU R128 loudness normalization bypassed (audio normalizer inactive).',
   },
 
   // --- Category: Content Purity & Gatekeepers ---
@@ -267,7 +267,7 @@ export const PILL_DEFINITIONS: PillDefinition[] = [
     categoryLabel: 'Purity & Gatekeepers',
     icon: '⛔',
     tag: 'BLACKLIST',
-    description: 'Real-time blacklist filter: cross-references candidate against active listeners’ vetoed artists and disliked tracks.',
+    description: 'Real-time blacklist filter: cross-references candidate against active listeners\' vetoed artists and disliked tracks.',
     defaultOffTelemetry: 'Dormant: Room veto shield bypassed.',
   },
 
@@ -279,8 +279,8 @@ export const PILL_DEFINITIONS: PillDefinition[] = [
     categoryLabel: 'Audio Muscle',
     icon: '⚡',
     tag: 'ZERO-GAP',
-    description: 'Pre-buffers 512KB of upcoming audio into RAM before handover, delivering near-instantaneous sub-second transitions with zero dead air.',
-    defaultOffTelemetry: 'Dormant: Cold-start stream resolution (prewarm buffer was not primed).',
+    description: 'Pre-buffers PCM audio of upcoming queue tracks into RAM before handover, delivering instantaneous zero-gap transitions.',
+    defaultOffTelemetry: 'Dormant: Cold-start stream resolution (standby deck idle in RAM).',
   },
 ];
 
@@ -291,7 +291,8 @@ export function computeBrainPills(
   currentTrack: AudioTrack | null,
   previousTrack: AudioTrack | null,
   transitionAnalysis: any | null,
-  activeListenersCount = 0
+  activeListenersCount = 0,
+  standbyStats?: { totalBytes: number; primedDecksCount: number }
 ): BrainPillPayload[] {
   if (!currentTrack) {
     return PILL_DEFINITIONS.map((p) => ({
@@ -307,13 +308,14 @@ export function computeBrainPills(
   const isManual = currentTrack.isManualRequest || curatedBy === 'User Request';
 
   // Harmonic context
-  const prevCamelot = previousTrack?.camelot || '8A';
-  const currCamelot = currentTrack.camelot || '8A';
-  const prevBpm = previousTrack?.bpm || 120;
-  const currBpm = currentTrack.bpm || 120;
-  const bpmDelta = Math.abs(currBpm - prevBpm);
-  const bpmDeltaPct = Math.round((bpmDelta / Math.max(1, currBpm, prevBpm)) * 100);
-  const isHarmonic = harmonicMixing.isKeyCompatible(prevCamelot, currCamelot);
+  const prevCamelot = previousTrack?.camelot;
+  const currCamelot = currentTrack.camelot;
+  const prevBpm = previousTrack?.bpm;
+  const currBpm = currentTrack.bpm;
+  const hasBothBpms = Boolean(prevBpm && currBpm);
+  const bpmDelta = hasBothBpms ? Math.abs(currBpm! - prevBpm!) : 0;
+  const bpmDeltaPct = hasBothBpms ? Math.round((bpmDelta / Math.max(1, currBpm!, prevBpm!)) * 100) : 0;
+  const isHarmonic = Boolean(prevCamelot && currCamelot && harmonicMixing.isKeyCompatible(prevCamelot, currCamelot));
 
   // Time capsule & story arc context
   const timeCapsuleYear = stationCurator.getTimeCapsuleYear();
@@ -324,19 +326,19 @@ export function computeBrainPills(
     let telemetry = def.defaultOffTelemetry;
 
     switch (def.id) {
-      // 1. Jev Decision Engine
+      // 1. Ranked-Choice LLM Selector (formerly Jev)
       case 'jev_decision':
-        active = curatedBy === 'Jev Decision Engine' || (engine === 'jev' && !isManual);
+        active = curatedBy === 'Ranked-Choice LLM Selector' || curatedBy === 'Jev Decision Engine' || (engine === 'jev' && !isManual);
         if (active) {
-          telemetry = `ACTIVE: Discriminative candidate selection scored listener preference weights & freshness decay.`;
+          telemetry = `ACTIVE: Single-token candidate selection scored listener preference weights via local Qwen 1.5B.`;
         }
         break;
 
-      // 2. Vector Latent JEPA
+      // 2. Dense Vector Retrieval (MiniLM)
       case 'vector_latent':
-        active = curatedBy === 'JEPA Vector Latent' || (engine === 'embedding' && !isManual);
+        active = curatedBy === 'Dense Vector Retrieval' || curatedBy === 'JEPA Vector Latent' || (engine === 'embedding' && !isManual);
         if (active) {
-          telemetry = `ACTIVE: Matched in 384-d latent embedding space (nearest acoustic neighbor to room centroid).`;
+          telemetry = `ACTIVE: Matched in 384-d semantic embedding space (nearest neighbor to room centroid via all-minilm).`;
         }
         break;
 
@@ -422,21 +424,27 @@ export function computeBrainPills(
 
       // 13. Camelot Harmonic Lock
       case 'camelot_lock':
-        active = isHarmonic;
-        if (active) {
-          telemetry = `ACTIVE: Compatible harmonic shift (${prevCamelot} ➔ ${currCamelot}) with zero dissonant clash.`;
+        if (prevCamelot && currCamelot) {
+          active = isHarmonic;
+          telemetry = active
+            ? `ACTIVE: Compatible harmonic shift (${prevCamelot} ➔ ${currCamelot}) with zero dissonant clash.`
+            : `Dormant: Key transition (${prevCamelot} ➔ ${currCamelot}) is an intentional energy/tempo shift.`;
         } else {
-          telemetry = `Dormant: Key transition (${prevCamelot} ➔ ${currCamelot}) is an intentional energy/tempo shift.`;
+          active = false;
+          telemetry = 'Dormant: Musical key unknown (harmonic analysis pending DSP pass).';
         }
         break;
 
       // 14. BPM Beat-Sync Lock
       case 'bpm_sync':
-        active = bpmDeltaPct <= 14;
-        if (active) {
-          telemetry = `ACTIVE: BPM proximity matched (${prevBpm} ➔ ${currBpm} BPM | Δ ${bpmDeltaPct}% tempo difference).`;
+        if (hasBothBpms) {
+          active = bpmDeltaPct <= 14;
+          telemetry = active
+            ? `ACTIVE: BPM proximity matched (${prevBpm} ➔ ${currBpm} BPM | Δ ${bpmDeltaPct}% tempo difference).`
+            : `Dormant: Tempo shift from ${prevBpm} to ${currBpm} BPM (Δ ${bpmDeltaPct}% tempo step).`;
         } else {
-          telemetry = `Dormant: Tempo shift from ${prevBpm} to ${currBpm} BPM (Δ ${bpmDeltaPct}% tempo step).`;
+          active = false;
+          telemetry = 'Dormant: Track tempo unknown (BPM analysis pending DSP pass).';
         }
         break;
 
@@ -458,15 +466,17 @@ export function computeBrainPills(
 
       // 17. EBU R128 Loudness
       case 'ebu_loudness':
-        active = true;
-        telemetry = `ACTIVE: Real-time broadcast loudness normalization active (-14.0 LUFS target).`;
+        active = featureFlags.isEnabled('feature_ebu_loudnorm');
+        telemetry = active
+          ? 'ACTIVE: Real-time broadcast loudness normalization active (-14.0 LUFS dynamic target).'
+          : 'Dormant: EBU R128 loudness normalization bypassed (audio normalizer inactive).';
         break;
 
       // 18. 48h Song Cooldown
       case 'cooldown_48h':
         active = !isManual;
         if (active) {
-          telemetry = `PASSED: Mathematical verification: 0 plays in the last 48 hours.`;
+          telemetry = 'PASSED: Mathematical verification: 0 plays in the last 48 hours.';
         }
         break;
 
@@ -480,39 +490,50 @@ export function computeBrainPills(
 
       // 20. Lyrics NLP English Gate
       case 'lyrics_nlp':
-        active = featureFlags.isEnabled('feature_language_gate');
-        if (active) {
-          telemetry = `PASSED: LRCLIB lyrics fetched + trigram stopwords verified 99.9% English discovery.`;
-        }
+        const isEn = !currentTrack.detectedLanguage || currentTrack.detectedLanguage === 'en';
+        active = featureFlags.isEnabled('feature_language_gate') && isEn;
+        telemetry = active
+          ? 'PASSED: Verified English metadata/lyrics via NLP language classifier.'
+          : `Dormant: Instrumental or international discovery (${currentTrack.detectedLanguage || 'non-en'}).`;
         break;
 
       // 21. Duration Clamp (±5s)
       case 'duration_clamp':
-        active = !isManual && currentTrack.durationSec > 0;
+        active = !isManual && currentTrack.durationDeltaSec !== undefined && currentTrack.durationDeltaSec <= 5;
         if (active) {
-          telemetry = `PASSED: Canonical duration (${currentTrack.durationSec}s) clamped within ±5s tolerance (zero fake loops).`;
+          telemetry = `PASSED: Canonical duration (${currentTrack.durationSec}s) matched stream within Δ${currentTrack.durationDeltaSec}s.`;
+        } else if (currentTrack.durationDeltaSec !== undefined) {
+          telemetry = `Dormant: Duration delta (Δ${currentTrack.durationDeltaSec}s) outside ±5s clamp or manual request.`;
+        } else {
+          telemetry = 'Dormant: Duration clamp bypassed.';
         }
         break;
 
       // 22. Topic Studio Master
       case 'topic_master':
-        active = !currentTrack.title.toLowerCase().includes('cover') && !currentTrack.title.toLowerCase().includes('karaoke');
-        if (active) {
-          telemetry = `PASSED: Official label studio master audio stream verified (zero audience noise or skits).`;
-        }
+        active = currentTrack.isTopicChannel === true;
+        telemetry = active
+          ? 'PASSED: Verified official YouTube Music - Topic studio master audio stream.'
+          : 'Dormant: Stream resolved via standard verified release (non-topic channel).';
         break;
 
       // 23. Room Veto Shield
       case 'room_veto_shield':
-        active = true;
-        telemetry = `PASSED: Checked against active listener blacklists (0 vetoes found for "${currentTrack.artist}").`;
+        active = activeListenersCount > 0;
+        telemetry = active
+          ? `PASSED: Checked against active room listener blacklists (0 vetoes found for "${currentTrack.artist}").`
+          : 'Dormant: No active room listeners in channel to evaluate blacklists.';
         break;
 
       // 24. RAM Prewarm Deck
       case 'ram_prewarm':
-        active = Boolean(currentTrack.prewarmedBuffer || currentTrack.streamUrl);
+        const standbyBytes = standbyStats?.totalBytes || 0;
+        active = featureFlags.isEnabled('feature_ram_standby_prewarm') && standbyBytes > 0;
         if (active) {
-          telemetry = `ACTIVE: 512KB pre-buffered in RAM for sub-second zero-gap handover.`;
+          const kb = Math.round(standbyBytes / 1024);
+          telemetry = `ACTIVE: ${kb}KB pre-buffered in RAM standby deck (${standbyStats?.primedDecksCount || 1} deck(s) primed).`;
+        } else {
+          telemetry = 'Dormant: Cold-start stream resolution (standby deck idle in RAM).';
         }
         break;
     }

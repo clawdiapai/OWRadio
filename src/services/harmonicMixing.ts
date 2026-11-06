@@ -2,14 +2,15 @@
  * @file harmonicMixing.ts
  * @description Harmonic mixing analysis and adaptive crossfade engine for VEXO.
  * Uses Camelot Wheel key compatibility and BPM delta to calculate smooth DJ blends.
+ * 100% genuine data: returns undefined when audio features have not been verified.
  */
 
 import featureFlags from './featureFlags.js';
 
 export interface HarmonicProfile {
-  bpm: number;
-  key: string;       // Camelot notation e.g. "8A" (A minor), "8B" (C major)
-  keyName: string;   // e.g. "A minor"
+  bpm?: number;
+  key?: string;       // Camelot notation e.g. "8A" (A minor), "8B" (C major)
+  keyName?: string;   // e.g. "A minor"
 }
 
 export interface MixingAnalysis {
@@ -44,12 +45,11 @@ const STANDARD_KEY_MAP: Record<string, string> = {
 
 class HarmonicMixingService {
   /**
-   * Deterministically infer or estimate musical key and BPM for a track
-   * using title, artist, Deezer metadata, and acoustic heuristics.
+   * Evaluates or normalizes musical key and BPM for a track.
+   * Returns undefined for unverified fields without synthesizing fake data.
    */
   public analyzeTrack(title: string, artist: string, bpmHint?: number, keyHint?: string): HarmonicProfile {
-    // 1. If keyHint provided, normalize to Camelot
-    let camelotKey = '8A';
+    let camelotKey: string | undefined = undefined;
     if (keyHint) {
       const cleanKey = keyHint.toLowerCase().replace(/[\s_]/g, '');
       if (CAMELOT_KEYS.includes(cleanKey.toUpperCase())) {
@@ -57,24 +57,14 @@ class HarmonicMixingService {
       } else if (STANDARD_KEY_MAP[cleanKey]) {
         camelotKey = STANDARD_KEY_MAP[cleanKey];
       }
-    } else {
-      // Deterministic acoustic hash from title + artist
-      const hash = this.stringHash(`${artist} - ${title}`);
-      camelotKey = CAMELOT_KEYS[Math.abs(hash) % CAMELOT_KEYS.length];
     }
 
-    // 2. Determine BPM
-    let bpm = bpmHint && bpmHint >= 60 && bpmHint <= 200 ? bpmHint : 0;
-    if (bpm === 0) {
-      // Harmonic baseline from hash in realistic DJ range (118 - 132 bpm for electronic, 85 - 110 for chill)
-      const hash = this.stringHash(`${title}::${artist}`);
-      bpm = 95 + (Math.abs(hash) % 40); // 95 - 134 bpm
-    }
+    const bpm = bpmHint && bpmHint >= 60 && bpmHint <= 200 ? Math.round(bpmHint) : undefined;
 
     return {
-      bpm: Math.round(bpm),
+      bpm,
       key: camelotKey,
-      keyName: this.camelotToName(camelotKey),
+      keyName: camelotKey ? this.camelotToName(camelotKey) : undefined,
     };
   }
 
@@ -98,6 +88,16 @@ class HarmonicMixingService {
 
     const profileA = this.analyzeTrack(trackA.title, trackA.artist, trackA.bpm, trackA.key);
     const profileB = this.analyzeTrack(trackB.title, trackB.artist, trackB.bpm, trackB.key);
+
+    if (!profileA.key || !profileB.key || !profileA.bpm || !profileB.bpm) {
+      return {
+        isHarmonicMatch: false,
+        bpmDeltaPct: 0,
+        recommendedCrossfadeSec: 1.0,
+        crossfadeFrames: 50,
+        reason: 'Standard 1.0s clean cut (harmonic metadata pending)',
+      };
+    }
 
     const keyCompat = this.isKeyCompatible(profileA.key, profileB.key);
     const bpmDelta = Math.abs(profileA.bpm - profileB.bpm);
@@ -153,6 +153,7 @@ class HarmonicMixingService {
    * 3. Relative major/minor flip (same number, different letter: 8A <-> 8B)
    */
   public isKeyCompatible(keyA: string, keyB: string): boolean {
+    if (!keyA || !keyB) return false;
     if (keyA === keyB) return true;
 
     const numA = parseInt(keyA.slice(0, -1), 10);
@@ -160,6 +161,8 @@ class HarmonicMixingService {
 
     const numB = parseInt(keyB.slice(0, -1), 10);
     const letterB = keyB.slice(-1).toUpperCase();
+
+    if (Number.isNaN(numA) || Number.isNaN(numB)) return false;
 
     // Relative major/minor
     if (numA === numB && letterA !== letterB) return true;
@@ -180,15 +183,6 @@ class HarmonicMixingService {
       }
     }
     return camelot;
-  }
-
-  private stringHash(str: string): number {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      hash |= 0;
-    }
-    return hash;
   }
 }
 

@@ -1,6 +1,6 @@
 /**
  * @file vectorCurator.ts
- * @description JEPA (Joint Embedding Predictive Architecture) & Dense Latent Vector Curation Engine.
+ * @description Dense Latent Vector Curation Engine.
  * Operates directly in 384-dimensional latent embedding space using Ollama's all-minilm.
  * Evaluates listener affinities, room energy, and seed vibes with <2ms matrix dot products
  * across 9,500+ catalog tracks with zero hallucinations and zero CPU spikes.
@@ -456,7 +456,7 @@ class VectorCurator {
 
       selected.push({
         track: trackMeta,
-        curatedBy: 'JEPA Vector Latent',
+        curatedBy: 'Dense Vector Retrieval',
         curationReason: reasonText,
       });
 
@@ -476,7 +476,7 @@ class VectorCurator {
     // 6. Log interaction to Brain Telemetry
     brainLogger.logInteraction({
       timestamp: Math.floor(Date.now() / 1000),
-      model: 'all-minilm (JEPA Latent)',
+      model: 'all-minilm (Dense Vector 384-d)',
       action: 'vector_curation',
       prompt: queryPrompt,
       response: JSON.stringify(
@@ -498,7 +498,7 @@ class VectorCurator {
       },
     });
 
-    console.log(`[VectorCurator] Selected ${selected.length} tracks via JEPA latent search in ${durationMs}ms`);
+    console.log(`[VectorCurator] Selected ${selected.length} tracks via dense vector search in ${durationMs}ms`);
     return selected;
   }
 }

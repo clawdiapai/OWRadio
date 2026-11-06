@@ -154,7 +154,7 @@ class JevCurator {
         .join('\n');
 
       const prompt = `<|im_start|>system
-You are a Jev-like discriminative decision model. You do not generate text or conversational explanations. Evaluate the room context against the typed candidate choices and output ONLY the single winning option letter (e.g. A, B, C, etc.).<|im_end|>
+You are a ranked-choice candidate decision selector. You do not generate text or conversational explanations. Evaluate the room context against the typed candidate choices and output ONLY the single winning option letter (e.g. A, B, C, etc.).<|im_end|>
 <|im_start|>user
 Room Context: ${contextStr}
 
@@ -209,8 +209,8 @@ Decision (output single winning letter only):<|im_end|>
 
         selectedResults.push({
           track: trackMeta,
-          curatedBy: 'Jev Decision Engine',
-          curationReason: `Jev Calibrated Decision [Option ${currentLetters[validIndex]}] | Forward eval: ${evalTimeMs}ms`,
+          curatedBy: 'Ranked-Choice LLM Selector',
+          curationReason: `Ranked-Choice Decision [Option ${currentLetters[validIndex]}] | Forward eval: ${evalTimeMs}ms`,
         });
 
         queuedSongIds.add(winner.id);
@@ -227,9 +227,9 @@ Decision (output single winning letter only):<|im_end|>
     // 4. Telemetry logging
     brainLogger.logInteraction({
       timestamp: Math.floor(Date.now() / 1000),
-      model: `${config.OLLAMA_MODEL} (Jev Decision Head)`,
+      model: `${config.OLLAMA_MODEL} (Ranked-Choice LLM)`,
       action: 'jev_decision',
-      prompt: `Jev Decision Pass (${candidatePool.length} candidates evaluated against room taste)`,
+      prompt: `Ranked-Choice Decision Pass (${candidatePool.length} candidates evaluated against room taste)`,
       response: JSON.stringify(
         selectedResults.map((s) => ({
           track: `${s.track.artist} - ${s.track.title}`,

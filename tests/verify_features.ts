@@ -8,8 +8,8 @@ import { sqlite } from '../src/db/index.js';
 console.log('=== 1. Verifying Feature Flags Service ===');
 const allFlags = featureFlags.getAllFlags();
 console.log(`Loaded ${allFlags.length} feature flags.`);
-if (allFlags.length !== 12) {
-  throw new Error(`Expected 12 feature flags, got ${allFlags.length}`);
+if (allFlags.length < 12) {
+  throw new Error(`Expected at least 12 feature flags, got ${allFlags.length}`);
 }
 
 // Exhaustively test all 12 feature flags toggling and SQLite persistence
@@ -26,7 +26,7 @@ for (const flag of allFlags) {
   // Restore initial state
   featureFlags.setEnabled(flag.id, initVal);
 }
-console.log('✅ All 12 individual feature flag toggles and SQLite persistence verified!');
+console.log(`✅ All ${allFlags.length} individual feature flag toggles and SQLite persistence verified!`);
 
 console.log('=== 2. Verifying Harmonic Mixing & Camelot Wheel ===');
 const transition = harmonicMixing.evaluateTransition(

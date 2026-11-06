@@ -974,13 +974,13 @@ export async function handleTaste(
     album: player.currentTrack.album,
     durationSec: player.currentTrack.durationSec,
   } : null;
-  const fingerprint = tasteRadarChart.getRoomFingerprint(activeUserIds, currentTrackSummary);
+  const fingerprint = tasteRadarChart.getRoomFingerprint(activeUserIds, currentTrackSummary, player?.broadcastTee?.getLiveAudioMeter()?.rms);
 
   let desc = `Analyzed acoustic affinities across **${fingerprint.listenerCount} active voice listeners**:\n\n`;
   if (fingerprint.currentTrackFingerprint) {
     const tf = fingerprint.currentTrackFingerprint;
     desc =
-      `🎵 **Playing Now:** **${tf.title}** by **${tf.artist}** (\`${tf.bpm} BPM\` • \`${tf.dominantGenre}\`)\n` +
+      `🎵 **Playing Now:** **${tf.title}** by **${tf.artist}** (${tf.bpm ? `\`${tf.bpm} BPM\` • ` : ''}\`${tf.dominantGenre}\`)\n` +
       `🎯 **Vibe Match to Room:** \`${tf.alignmentScore}% Alignment\`\n\n` +
       fingerprint.asciiChart +
       `\n🔥 **Room Energy:** \`${fingerprint.energyIndex} / 100\` • **Track Energy:** \`${tf.energyIndex} / 100\`\n` +

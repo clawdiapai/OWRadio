@@ -20,6 +20,8 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import config from '../config.js';
 import dynamicSettings from '../services/dynamicSettings.js';
+import featureFlags from '../services/featureFlags.js';
+import audioDsp from '../utils/audioDsp.js';
 
 /**
  * 48,000 Hz * 2 channels (stereo) * 2 bytes (16-bit s16le) * 0.02 seconds = 3,840 bytes per 20ms frame.
@@ -138,6 +140,8 @@ interface DecodeChannel {
   lastYtDlpError: string;
   startupTimeout: NodeJS.Timeout | null;
   underrunStartTime: number | null;
+  dspChunks: Buffer[];
+  dspAnalyzed: boolean;
 }
 
 interface CrossfadeState {
@@ -429,6 +433,8 @@ export class BroadcastTee extends EventEmitter {
       lastYtDlpError: '',
       startupTimeout: null,
       underrunStartTime: null,
+      dspChunks: [],
+      dspAnalyzed: false,
     };
 
     channel.startupTimeout = setTimeout(() => {
@@ -510,7 +516,9 @@ export class BroadcastTee extends EventEmitter {
       if (config.ENABLE_SILENCE_TRIMMING) {
         afFilters.push(`silenceremove=start_periods=1:start_duration=0.08:start_threshold=${config.SILENCE_THRESHOLD_DB}dB`);
       }
-      if (dynamicSettings.getBoolean('audio_normalization_enabled', true)) {
+      if (featureFlags.isEnabled('feature_ebu_loudnorm')) {
+        afFilters.push('loudnorm=I=-14:LRA=11:TP=-1.5');
+      } else if (dynamicSettings.getBoolean('audio_normalization_enabled', true)) {
         afFilters.push('dynaudnorm=f=150:g=15:m=10');
       }
       if (afFilters.length > 0) {
@@ -565,7 +573,9 @@ export class BroadcastTee extends EventEmitter {
       if (config.ENABLE_SILENCE_TRIMMING) {
         afFilters.push(`silenceremove=start_periods=1:start_duration=0.08:start_threshold=${config.SILENCE_THRESHOLD_DB}dB`);
       }
-      if (dynamicSettings.getBoolean('audio_normalization_enabled', true)) {
+      if (featureFlags.isEnabled('feature_ebu_loudnorm')) {
+        afFilters.push('loudnorm=I=-14:LRA=11:TP=-1.5');
+      } else if (dynamicSettings.getBoolean('audio_normalization_enabled', true)) {
         afFilters.push('dynaudnorm=f=150:g=15:m=10');
       }
       if (afFilters.length > 0) {
@@ -599,6 +609,35 @@ export class BroadcastTee extends EventEmitter {
 
       if (channel.channelType === 'active') {
         this.audioBytesDecoded = channel.audioBytesDecoded;
+
+        // Audio DSP Analysis: analyze first ~6.5 seconds (1.2 MB) of 48kHz stereo s16le PCM
+        if (!channel.dspAnalyzed && featureFlags.isEnabled('feature_pcm_dsp_analysis')) {
+          channel.dspChunks.push(chunk);
+          if (channel.audioBytesDecoded >= 1_200_000) {
+            channel.dspAnalyzed = true;
+            const pcmSample = Buffer.concat(channel.dspChunks);
+            channel.dspChunks = []; // free memory immediately
+            try {
+              const analysis = audioDsp.analyzePcm(pcmSample);
+              if (analysis.isReliable) {
+                console.log(
+                  `[BroadcastTee] 🎵 Audio DSP analyzed active track: ${analysis.bpm ? `${analysis.bpm} BPM` : 'BPM unknown'} | ${analysis.camelot ? `Key: ${analysis.key} (${analysis.camelot})` : 'Key unknown'} (confidence: ${analysis.bpmConfidence})`
+                );
+                this.emit('trackAnalyzed', {
+                  streamUrl: channel.streamUrl,
+                  bpm: analysis.bpm,
+                  key: analysis.key,
+                  camelot: analysis.camelot,
+                  bpmConfidence: analysis.bpmConfidence,
+                  keyConfidence: analysis.keyConfidence,
+                  outroCueSec: analysis.outroCueSec,
+                });
+              }
+            } catch (dspErr) {
+              console.warn('[BroadcastTee] Audio DSP analysis error:', (dspErr as Error).message);
+            }
+          }
+        }
       }
 
       // Standby Decks (B, C, D): Pre-buffer ~3.0s (150 frames = 576,000 bytes) of PCM, then pause decoder stdout
@@ -768,6 +807,15 @@ export class BroadcastTee extends EventEmitter {
    * Evicts any standby channels that are no longer in the upcoming list.
    */
   public prepareStandbyDecks(streamUrls: string[]): void {
+    if (!featureFlags.isEnabled('feature_ram_standby_prewarm')) {
+      if (this.standbyPool.size > 0) {
+        for (const [, channel] of this.standbyPool) {
+          this.teardownChannel(channel);
+        }
+        this.standbyPool.clear();
+      }
+      return;
+    }
     const maxDecks = Math.max(15, dynamicSettings.getNumber('audio_standby_decks_count', BroadcastTee.MAX_STANDBY_DECKS));
     const targetUrls = streamUrls.slice(0, maxDecks);
     const targetSet = new Set(targetUrls);
@@ -793,6 +841,23 @@ export class BroadcastTee extends EventEmitter {
    */
   public prepareStandby(streamUrl: string): void {
     this.prepareStandbyDecks([streamUrl]);
+  }
+
+  /**
+   * Returns live RAM standby deck metrics for genuine telemetry.
+   */
+  public getStandbyStats(): { totalBytes: number; primedDecksCount: number; decks: Array<{ url: string; bytes: number; isPrimed: boolean }> } {
+    let totalBytes = 0;
+    let primedDecksCount = 0;
+    const decks: Array<{ url: string; bytes: number; isPrimed: boolean }> = [];
+
+    for (const [url, channel] of this.standbyPool) {
+      totalBytes += channel.queueBytes;
+      if (channel.isPrimed) primedDecksCount++;
+      decks.push({ url, bytes: channel.queueBytes, isPrimed: channel.isPrimed });
+    }
+
+    return { totalBytes, primedDecksCount, decks };
   }
 
   /**

@@ -18,8 +18,8 @@ console.log('⚡ OWRADIO - OPEN WEB RADIO & DISCORD AUDIO ENGINE');
 console.log('====================================================');
 
 async function main() {
-  // 0. Initialize JEPA / Latent Vector Curation Index
-  console.log('[Bootstrap] Initializing JEPA / Latent Vector Curation Index...');
+  // 0. Initialize Dense Latent Vector Curation Index
+  console.log('[Bootstrap] Initializing Dense Latent Vector (MiniLM) Curation Index...');
   await vectorCurator.init();
 
   // 1. Initialize Player Engine

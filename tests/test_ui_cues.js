@@ -57,11 +57,11 @@ if (elements['waveform-bpm-tag']?.innerText !== 'BPM: ~124') {
 if (elements['waveform-key-tag']?.innerText !== 'Key: CM (5A)') {
   throw new Error('Key tag mismatch');
 }
-if (!elements['waveform-drop-tag']?.innerText.includes('Drop / Cue: in 2:52')) {
+if (!elements['waveform-drop-tag']?.innerText.includes('Transition Cue: in 2:52')) {
   throw new Error('Drop tag mismatch');
 }
 
-// Case 2: Minimal fallback (no bpm, key, or camelot from server)
+// Case 2: Clean honest pending state (no bpm, key, or camelot from server)
 vm.runInContext(`
   currentState = {
     state: 'playing',
@@ -76,19 +76,19 @@ vm.runInContext(`
   updateWaveformCues();
 `, ctx);
 
-console.log('--- Test 2: Fallback estimation (<8s left -> crossfade cue) ---');
+console.log('--- Test 2: Honest pending state (<8s left -> crossfade cue) ---');
 console.log('BPM tag:', elements['waveform-bpm-tag']?.innerText);
 console.log('Key tag:', elements['waveform-key-tag']?.innerText);
 console.log('Drop tag:', elements['waveform-drop-tag']?.innerText);
 console.log('Cue badge:', elements['waveform-cue-badge']?.innerText);
 
-if (!elements['waveform-bpm-tag']?.innerText.startsWith('BPM: ~')) {
-  throw new Error('Fallback BPM tag missing');
+if (elements['waveform-bpm-tag']?.innerText !== 'BPM: --') {
+  throw new Error('Pending BPM tag should be BPM: --');
 }
-if (!elements['waveform-key-tag']?.innerText.startsWith('Key: ')) {
-  throw new Error('Fallback Key tag missing');
+if (elements['waveform-key-tag']?.innerText !== 'Key: --') {
+  throw new Error('Pending Key tag should be Key: --');
 }
-if (elements['waveform-drop-tag']?.innerText !== 'Drop / Cue: in 6s') {
+if (elements['waveform-drop-tag']?.innerText !== 'Transition Cue: in 6s') {
   throw new Error('Imminent Drop tag mismatch');
 }
 if (elements['waveform-cue-badge']?.innerText !== '⚡ CROSSFADE CUE') {
@@ -113,7 +113,7 @@ if (elements['waveform-bpm-tag']?.innerText !== 'BPM: --') {
 if (elements['waveform-key-tag']?.innerText !== 'Key: --') {
   throw new Error('Idle Key tag mismatch');
 }
-if (elements['waveform-drop-tag']?.innerText !== 'Drop / Cue: --') {
+if (elements['waveform-drop-tag']?.innerText !== 'Transition Cue: --') {
   throw new Error('Idle Drop tag mismatch');
 }
 if (elements['waveform-cue-badge']?.innerText !== 'IDLE') {

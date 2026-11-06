@@ -147,7 +147,7 @@ export class PlaylistBlender {
             for (let c = 0; c < lookahead; c++) {
               const candidate = pool[c];
               const analysis = harmonicMixing.evaluateTransition(previousTrack, candidate);
-              const score = (analysis.isHarmonicMatch ? 100 : 0) - analysis.bpmDeltaPct;
+              const score = analysis.isHarmonicMatch ? (100 - analysis.bpmDeltaPct) : -1;
               if (score > bestScore) {
                 bestScore = score;
                 bestIdx = c;

@@ -29,6 +29,7 @@ export interface AudioTrackOptions {
   bpm?: number;
   key?: string;
   camelot?: string;
+  detectedLanguage?: string;
 }
 
 export class AudioTrack {
@@ -49,9 +50,12 @@ export class AudioTrack {
   public readonly curatedBy: string;
   public readonly curationReason?: string;
   public readonly isrc?: string;
-  public readonly bpm: number;
-  public readonly key: string;
-  public readonly camelot: string;
+  public bpm?: number;
+  public key?: string;
+  public camelot?: string;
+  public isTopicChannel?: boolean;
+  public durationDeltaSec?: number;
+  public detectedLanguage?: string;
 
   /** Resolved HTTP stream URL for audio decoding */
   public streamUrl?: string;
@@ -83,6 +87,7 @@ export class AudioTrack {
     this.bpm = opts.bpm || harmonic.bpm;
     this.key = opts.key || harmonic.keyName;
     this.camelot = opts.camelot || harmonic.key;
+    this.detectedLanguage = opts.detectedLanguage;
   }
 
   /**

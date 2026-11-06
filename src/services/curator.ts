@@ -46,7 +46,7 @@ export function setEngine(engine: CurationEngineType): void {
 
 export interface CuratedTrackResult {
   track: DeezerTrackMetadata;
-  curatedBy: 'AI Room Mix' | 'AI Wildcard' | 'JEPA Vector Latent' | 'Jev Decision Engine' | 'Dynamic Taste Deep-Cut' | 'Dynamic Era Roulette' | 'Dynamic Genre Explorer' | 'User Request';
+  curatedBy: 'AI Room Mix' | 'AI Wildcard' | 'Dense Vector Retrieval' | 'JEPA Vector Latent' | 'Ranked-Choice LLM Selector' | 'Jev Decision Engine' | 'Dynamic Taste Deep-Cut' | 'Dynamic Era Roulette' | 'Dynamic Genre Explorer' | 'User Request';
   curationReason: string;
 }
 

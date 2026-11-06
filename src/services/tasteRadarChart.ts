@@ -9,8 +9,6 @@
 import config from '../config.js';
 import { sqlite } from '../db/index.js';
 import featureFlags from './featureFlags.js';
-import harmonicMixing from './harmonicMixing.js';
-
 export interface TasteDimension {
   axis: string;
   label: string;
@@ -32,7 +30,7 @@ export interface TrackTasteFingerprint {
   title: string;
   artist: string;
   album?: string;
-  bpm: number;
+  bpm?: number;
   dimensions: TrackTasteDimension[];
   dominantGenre: string;
   alignmentScore: number; // 0 to 100 (% vibe match to room)
@@ -55,6 +53,7 @@ export interface CurrentTrackCandidate {
   album?: string;
   genre?: string;
   durationSec?: number;
+  bpm?: number;
 }
 
 const FALLBACK_LASTFM_KEY = 'b25b959554ed76058ac220b7b2e0a026';
@@ -134,18 +133,7 @@ function matchesKeyword(text: string, kw: string): boolean {
 class TasteRadarChartService {
   private artistTagCache = new Map<string, { tags: string[]; expiresAt: number }>();
 
-  /**
-   * Deterministic 32-bit integer string hash.
-   */
-  private stringHash(str: string): number {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash |= 0;
-    }
-    return hash;
-  }
+  
 
   /**
    * Fetches crowdsourced genre tags from Last.fm open API with in-memory caching.
@@ -182,10 +170,11 @@ class TasteRadarChartService {
    */
   public getRoomFingerprint(
     memberUserIds: string[],
-    currentTrack?: CurrentTrackCandidate | null
+    currentTrack?: CurrentTrackCandidate | null,
+    livePcmRms?: number
   ): RoomTasteFingerprint {
     if (!featureFlags.isEnabled('feature_taste_radar_chart')) {
-      return this.getDefaultFingerprint(memberUserIds.length, currentTrack);
+      return this.getDefaultFingerprint(memberUserIds.length, currentTrack, livePcmRms);
     }
 
     // Default neutral baseline values (25% across all genres for clean neutral circle)
@@ -265,7 +254,7 @@ class TasteRadarChartService {
 
     // Calculate Current Track Profile & Deltas if track is present
     const currentTrackFingerprint = currentTrack && currentTrack.title
-      ? this.getTrackFingerprint(currentTrack, dimensions)
+      ? this.getTrackFingerprint(currentTrack, dimensions, livePcmRms)
       : null;
 
     const asciiChart = this.renderAsciiRadar(dimensions, currentTrackFingerprint);
@@ -285,22 +274,22 @@ class TasteRadarChartService {
    */
   public getTrackFingerprint(
     track: CurrentTrackCandidate,
-    roomDimensions?: TasteDimension[]
+    roomDimensions?: TasteDimension[],
+    livePcmRms?: number
   ): TrackTasteFingerprint {
-    const rawKey = `${track.artist} - ${track.title}`.toLowerCase();
-    const hash = Math.abs(this.stringHash(rawKey));
-
-    // Base subtle acoustic floor: 14% to 22%
+    // Base genuine acoustic scores start strictly at 0 (zero synthetic bit-shift floors)
     const scores: Record<string, number> = {
-      electronic: 14 + ((hash >> 1) % 8),
-      rock: 14 + ((hash >> 2) % 8),
-      synth: 14 + ((hash >> 3) % 8),
-      funk: 14 + ((hash >> 4) % 8),
-      hiphop: 14 + ((hash >> 5) % 8),
-      indie: 14 + ((hash >> 6) % 8),
-      chill: 12 + ((hash >> 7) % 6),
+      electronic: 0,
+      rock: 0,
+      synth: 0,
+      funk: 0,
+      hiphop: 0,
+      indie: 0,
+      chill: 0,
       energy: 50,
     };
+
+    const bpm = track.bpm;
 
     // Query extra metadata from SQLite if available
     let dbGenre = track.genre || '';
@@ -353,33 +342,26 @@ class TasteRadarChartService {
       for (const kw of keywords) {
         if (matchesKeyword(corpus, kw)) {
           matches++;
-          if (matches === 1) scores[axis] += 55; // Primary boost to ~70-77%
-          else if (matches === 2) scores[axis] += 20; // Secondary boost to ~90-97%
+          if (matches === 1) scores[axis] += 65;
+          else if (matches === 2) scores[axis] += 25;
           else scores[axis] += 5;
         }
       }
       scores[axis] = Math.min(100, scores[axis]);
     }
 
-    // Determine BPM via harmonic mixing heuristics
-    const harmonic = harmonicMixing.analyzeTrack(track.title, track.artist);
-    const bpm = harmonic.bpm;
-
-    // Energy Index derivation
-    if (dbEnergy !== null && dbEnergy >= 10 && dbEnergy <= 100) {
+    // Energy Index derivation: prefer real-time PCM RMS when audio is live
+    if (livePcmRms !== undefined && livePcmRms > 0 && featureFlags.isEnabled('feature_live_pcm_energy')) {
+      // True live PCM RMS scaling (0.02 - 0.40 maps dynamically to 15% - 100%)
+      scores.energy = Math.max(10, Math.min(100, Math.round(livePcmRms * 280)));
+    } else if (dbEnergy !== null && dbEnergy >= 10 && dbEnergy <= 100) {
       scores.energy = dbEnergy;
     } else {
-      let bpmEnergy = 50;
-      if (bpm < 85) bpmEnergy = 32 + ((bpm - 60) * 0.5);
-      else if (bpm < 110) bpmEnergy = 45 + ((bpm - 85) * 0.6);
-      else if (bpm < 130) bpmEnergy = 60 + ((bpm - 110) * 0.9);
-      else bpmEnergy = 78 + Math.min(20, (bpm - 130) * 0.5);
-
-      const rockEnergyBoost = scores.rock >= 60 ? (scores.rock - 50) * 0.35 : 0;
-      const electronicEnergyBoost = scores.electronic >= 60 ? (scores.electronic - 50) * 0.3 : 0;
-      const genreEnergyBoost = ((scores.electronic + scores.rock + scores.hiphop) / 3) * 0.25;
-      const chillDampener = (scores.chill / 100) * 15;
-      scores.energy = Math.max(10, Math.min(100, Math.round(bpmEnergy * 0.7 + genreEnergyBoost + rockEnergyBoost + electronicEnergyBoost - chillDampener)));
+      const rockEnergyBoost = scores.rock >= 50 ? (scores.rock - 50) * 0.4 : 0;
+      const electronicEnergyBoost = scores.electronic >= 50 ? (scores.electronic - 50) * 0.35 : 0;
+      const genreEnergyBoost = ((scores.electronic + scores.rock + scores.hiphop) / 3) * 0.3;
+      const chillDampener = (scores.chill / 100) * 20;
+      scores.energy = Math.max(10, Math.min(100, Math.round(50 + genreEnergyBoost + rockEnergyBoost + electronicEnergyBoost - chillDampener)));
     }
 
     // Chill & Ambient score balance:
@@ -452,7 +434,7 @@ class TasteRadarChartService {
     }
     const cosine = normRoom > 0 && normTrack > 0 ? dot / (Math.sqrt(normRoom) * Math.sqrt(normTrack)) : 0.8;
     // Scale cosine into a natural alignment percentage
-    const alignmentScore = Math.max(30, Math.min(100, Math.round(cosine * 100)));
+    const alignmentScore = Math.max(0, Math.min(100, Math.round(cosine * 100)));
 
     return {
       trackId: track.id || '',
@@ -469,7 +451,8 @@ class TasteRadarChartService {
 
   private getDefaultFingerprint(
     listenerCount: number,
-    currentTrack?: CurrentTrackCandidate | null
+    currentTrack?: CurrentTrackCandidate | null,
+    livePcmRms?: number
   ): RoomTasteFingerprint {
     const dimensions: TasteDimension[] = [
       { axis: 'electronic', label: '⚡ Electronic / Dance', value: 45, dominantTag: 'Club & Rhythm' },
@@ -483,7 +466,7 @@ class TasteRadarChartService {
     ];
 
     const currentTrackFingerprint = currentTrack && currentTrack.title
-      ? this.getTrackFingerprint(currentTrack, dimensions)
+      ? this.getTrackFingerprint(currentTrack, dimensions, livePcmRms)
       : null;
 
     return {

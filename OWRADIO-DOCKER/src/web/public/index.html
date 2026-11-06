@@ -2231,7 +2231,7 @@
             <div class="waveform-footer">
               <span id="waveform-bpm-tag">BPM: --</span>
               <span id="waveform-key-tag">Key: --</span>
-              <span id="waveform-drop-tag">Drop / Cue: --</span>
+              <span id="waveform-drop-tag">Transition Cue: --</span>
             </div>
           </div>
 
@@ -2357,7 +2357,7 @@
                 ⚡ Vector Latent
               </button>
               <button id="engine-btn-jev" class="engine-toggle-btn engine-jev" onclick="switchCurationEngine('jev')">
-                🎯 Jev Decision
+                🎯 Ranked LLM
               </button>
               <button id="engine-btn-llm" class="engine-toggle-btn engine-llm" onclick="switchCurationEngine('llm')">
                 🤖 Autoregressive LLM
@@ -2539,7 +2539,7 @@
             <select id="brain-filter-action" class="btn" style="padding: 6px 12px; font-size: 12px;" onchange="filterBrainInteractions()">
               <option value="all">All Actions</option>
               <option value="taste_radar">🛰️ Taste Radar (Catalog Expansion)</option>
-              <option value="jev_decision">🎯 Jev Decision Engine</option>
+              <option value="jev_decision">🎯 Ranked-Choice LLM Selector</option>
               <option value="vector_curation">⚡ Vector Latent Search</option>
               <option value="curation">🤖 LLM Curation (Autoplay)</option>
               <option value="vibe">✨ Vibe Generator</option>
