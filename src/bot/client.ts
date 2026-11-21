@@ -592,7 +592,14 @@ export async function createDiscordBot(player: GuildPlayer): Promise<Client> {
   let membershipDebounceTimer: NodeJS.Timeout | null = null;
 
   client.on(Events.VoiceStateUpdate, async (oldState: VoiceState, newState: VoiceState) => {
-    // Ignore bot voice state updates
+    // Handle bot's own voice state transitions (e.g. moved between channels by a moderator, or disconnected)
+    const isOurBot = (oldState.id === client.user?.id || newState.id === client.user?.id);
+    if (isOurBot) {
+      await player.handleBotVoiceStateUpdate(oldState, newState);
+      return;
+    }
+
+    // Ignore other bots
     if (oldState.member?.user.bot || newState.member?.user.bot) return;
 
     // Check if voice channel changed

@@ -17,7 +17,7 @@ import {
   VoiceConnection,
   VoiceConnectionStatus,
 } from '@discordjs/voice';
-import { Routes, type VoiceBasedChannel, type Client } from 'discord.js';
+import { Routes, type VoiceBasedChannel, type VoiceState, type Client } from 'discord.js';
 import config from '../config.js';
 import { sqlite, getBotState, setBotState } from '../db/index.js';
 import { AudioTrack } from './AudioTrack.js';
@@ -142,6 +142,7 @@ export class GuildPlayer extends EventEmitter {
 
   /** Discord Client Reference for Voice Channel Status REST API */
   private client: Client | null = null;
+  private lastChannelStatuses = new Map<string, string>();
 
   /** Hourly notification tracker */
   private lastChimeHour: number = -1;
@@ -464,8 +465,14 @@ export class GuildPlayer extends EventEmitter {
       return;
     }
 
+    const previousChannel = this.activeVoiceChannel;
+    if (previousChannel && previousChannel.id !== channel.id) {
+      await this.clearVoiceChannelStatus(previousChannel);
+    }
+
     this.activeVoiceChannel = channel;
 
+    const isNewConnection = !this.voiceConnection;
     this.voiceConnection = joinVoiceChannel({
       channelId: channel.id,
       guildId: channel.guild.id,
@@ -474,12 +481,14 @@ export class GuildPlayer extends EventEmitter {
       selfMute: false,
     });
 
-    this.voiceConnection.on('stateChange', (oldState, newState) => {
-      console.log(`[GuildPlayer] VoiceConnection state: ${oldState.status} -> ${newState.status}`);
-    });
-    this.voiceConnection.on('error', (err) => {
-      console.error(`[GuildPlayer] VoiceConnection error:`, (err as Error).message);
-    });
+    if (isNewConnection) {
+      this.voiceConnection.on('stateChange', (oldState, newState) => {
+        console.log(`[GuildPlayer] VoiceConnection state: ${oldState.status} -> ${newState.status}`);
+      });
+      this.voiceConnection.on('error', (err) => {
+        console.error(`[GuildPlayer] VoiceConnection error:`, (err as Error).message);
+      });
+    }
 
     try {
       await entersState(this.voiceConnection, VoiceConnectionStatus.Ready, 15_000);
@@ -501,6 +510,11 @@ export class GuildPlayer extends EventEmitter {
         this.audioResource.volume?.setVolume(this.volume / 100);
         this.audioPlayer.play(this.audioResource);
       }
+
+      // Update voice channel status on the new channel
+      if (this.currentTrack) {
+        await this.updateVoiceChannelStatus(this.currentTrack);
+      }
     } catch (err) {
       console.error('[GuildPlayer] Failed to connect to voice channel:', (err as Error).message);
       this.disconnectVoice();
@@ -511,7 +525,9 @@ export class GuildPlayer extends EventEmitter {
    * Disconnect from Discord voice channel.
    */
   public disconnectVoice(): void {
-    this.updateVoiceChannelStatus(null);
+    if (this.activeVoiceChannel) {
+      void this.clearVoiceChannelStatus(this.activeVoiceChannel);
+    }
     if (this.voiceConnection) {
       this.voiceConnection.destroy();
       this.voiceConnection = null;
@@ -1427,40 +1443,135 @@ export class GuildPlayer extends EventEmitter {
   }
 
   /**
-   * Updates the Discord Voice Channel Status to "Artist - Song - Album - Year"
-   * or clears it when playback finishes or disconnects.
+   * Formats the status text for a track, or empty string if disabled / no track.
    */
-  public async updateVoiceChannelStatus(track: AudioTrack | null): Promise<void> {
-    if (!this.activeVoiceChannel) return;
+  public formatTrackStatus(track: AudioTrack | null): string {
+    if (!track || !dynamicSettings.getBoolean('discord_voice_status_enabled', true)) {
+      return '';
+    }
+    const parts = [track.artist, track.title];
+    if (track.album) parts.push(track.album);
+    if (track.releaseYear) parts.push(String(track.releaseYear));
+    let statusText = parts.join(' - ');
+    if (statusText.length > 490) {
+      statusText = statusText.slice(0, 487) + '...';
+    }
+    return statusText;
+  }
+
+  /**
+   * Sets or clears the voice channel status on a specific channel ID or channel object.
+   * Caches last status per channel to avoid unnecessary duplicate REST calls.
+   */
+  public async setVoiceChannelStatusOn(
+    channelOrId: VoiceBasedChannel | string,
+    statusText: string,
+    force = false
+  ): Promise<void> {
+    const channelId = typeof channelOrId === 'string' ? channelOrId : channelOrId.id;
+    if (!channelId) return;
+
+    if (!force && this.lastChannelStatuses.get(channelId) === statusText) {
+      return;
+    }
+
     try {
-      let statusText = '';
-      if (track && dynamicSettings.getBoolean('discord_voice_status_enabled', true)) {
-        const parts = [track.artist, track.title];
-        if (track.album) parts.push(track.album);
-        if (track.releaseYear) parts.push(String(track.releaseYear));
-        statusText = parts.join(' - ');
-        if (statusText.length > 490) {
-          statusText = statusText.slice(0, 487) + '...';
-        }
-      }
-
-      const channelId = this.activeVoiceChannel.id;
-
-      if (typeof (this.activeVoiceChannel as any).setStatus === 'function') {
-        await (this.activeVoiceChannel as any).setStatus(statusText);
+      if (typeof channelOrId !== 'string' && typeof (channelOrId as any).setStatus === 'function') {
+        await (channelOrId as any).setStatus(statusText);
       } else if (this.client?.rest) {
         await this.client.rest.put(Routes.channelVoiceStatus(channelId), {
           body: { status: statusText },
         });
       }
 
+      this.lastChannelStatuses.set(channelId, statusText);
+
       if (statusText) {
-        console.log(`[GuildPlayer] Discord Voice Channel Status updated: "${statusText}"`);
+        console.log(`[GuildPlayer] Discord Voice Channel Status updated for channel ${channelId}: "${statusText}"`);
       } else {
-        console.log(`[GuildPlayer] Cleared Discord Voice Channel Status.`);
+        console.log(`[GuildPlayer] Cleared Discord Voice Channel Status for channel: ${channelId}`);
       }
     } catch (err) {
-      console.warn(`[GuildPlayer] Could not update Voice Channel Status: ${(err as Error).message}`);
+      console.warn(`[GuildPlayer] Could not update Voice Channel Status for channel ${channelId}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Clears Discord Voice Channel Status for a specific channel (or current active channel if omitted).
+   */
+  public async clearVoiceChannelStatus(channelOrId?: VoiceBasedChannel | string | null): Promise<void> {
+    const target = channelOrId ?? this.activeVoiceChannel;
+    if (!target) return;
+    await this.setVoiceChannelStatusOn(target, '');
+  }
+
+  /**
+   * Updates the Discord Voice Channel Status to "Artist - Song - Album - Year"
+   * or clears it when playback finishes or disconnects.
+   */
+  public async updateVoiceChannelStatus(track: AudioTrack | null): Promise<void> {
+    if (!this.activeVoiceChannel) return;
+    const statusText = this.formatTrackStatus(track);
+    await this.setVoiceChannelStatusOn(this.activeVoiceChannel, statusText);
+  }
+
+  /**
+   * Handles voice state transitions for the bot itself (e.g., when manually moved
+   * by moderators between channels or disconnected from a voice channel).
+   */
+  public async handleBotVoiceStateUpdate(oldState: VoiceState, newState: VoiceState): Promise<void> {
+    const oldChannelId = oldState.channelId;
+    const newChannelId = newState.channelId;
+
+    // No channel change (e.g. server mute/deaf, streaming state update)
+    if (oldChannelId === newChannelId) return;
+
+    console.log(`[GuildPlayer] Bot voice channel transition: ${oldChannelId || 'None'} -> ${newChannelId || 'None'}`);
+
+    // If bot was in a previous channel, clear its voice status
+    if (oldChannelId) {
+      await this.clearVoiceChannelStatus(oldState.channel ?? oldChannelId);
+    }
+
+    // Case 1: Bot moved to a new voice channel
+    if (newChannelId) {
+      let newChannel = newState.channel;
+      if (!newChannel && this.client) {
+        newChannel = (await this.client.channels.fetch(newChannelId).catch(() => null)) as VoiceBasedChannel | null;
+      }
+
+      this.activeVoiceChannel = newChannel;
+
+      if (newChannel) {
+        setBotState('last_guild_id', newChannel.guild.id);
+        setBotState('last_voice_channel_id', newChannel.id);
+        setBotState('last_voice_channel_name', newChannel.name);
+
+        // Keep VoiceConnection adapter in sync
+        try {
+          joinVoiceChannel({
+            channelId: newChannel.id,
+            guildId: newChannel.guild.id,
+            adapterCreator: newChannel.guild.voiceAdapterCreator as any,
+            selfDeaf: true,
+            selfMute: false,
+          });
+        } catch (err) {
+          console.warn(`[GuildPlayer] VoiceConnection adapter update warning: ${(err as Error).message}`);
+        }
+      }
+
+      // Write current track status to the new channel
+      if (this.currentTrack) {
+        await this.updateVoiceChannelStatus(this.currentTrack);
+      }
+
+      // Re-curate room for new listeners
+      await this.handleVoiceRoomMembershipChange();
+    } 
+    // Case 2: Bot was disconnected/kicked from voice
+    else {
+      this.disconnectVoice();
     }
   }
 
@@ -1475,12 +1586,15 @@ export class GuildPlayer extends EventEmitter {
       : 0;
 
     const upNextTrack = this.pendingTrack || this.queue[0];
+    const standbyStats = typeof (this.broadcastTee as any)?.getStandbyStats === 'function'
+      ? this.broadcastTee.getStandbyStats()
+      : undefined;
     const brainPills = brainMatrix.computeBrainPills(
       this.currentTrack,
       this.previousTrack,
       this.lastTransitionAnalysis,
       this.getActiveListenerNames().length,
-      this.broadcastTee.getStandbyStats()
+      standbyStats
     );
     const activeBrainCount = brainPills.filter((p) => p.active).length;
 
