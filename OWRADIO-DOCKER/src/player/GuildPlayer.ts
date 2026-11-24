@@ -126,7 +126,15 @@ export class GuildPlayer extends EventEmitter {
   private isPlayingNext = false;
   private pendingTrack: AudioTrack | null = null;
   private isTransitioning = false;
+  private transitionStartedAt: number | null = null;
+  private playingNextStartedAt: number | null = null;
+  private handlingFailureStartedAt: number | null = null;
   private audioResource: any = null;
+
+  private setTransitioning(val: boolean): void {
+    this.isTransitioning = val;
+    this.transitionStartedAt = val ? Date.now() : null;
+  }
 
   /** Health & anti-cascade protection */
   private trackPlayStartTime = 0;
@@ -213,6 +221,26 @@ export class GuildPlayer extends EventEmitter {
     if (this.playbackHealthWatchdogTimer) return;
 
     this.playbackHealthWatchdogTimer = setInterval(() => {
+      // Transition timeout circuit-breaker (detect stuck transitions > 15s)
+      if (this.isTransitioning) {
+        if (this.transitionStartedAt && Date.now() - this.transitionStartedAt > 15_000) {
+          console.warn(
+            `[GuildPlayer] ⚠️ Transition watchdog: handover timed out after 15s (pending: "${this.pendingTrack?.title || 'none'}"). Forcing transition reset and advancing.`
+          );
+          const stuckPending = this.pendingTrack;
+          this.pendingTrack = null;
+          this.setTransitioning(false);
+          if (stuckPending) {
+            void this.handleTrackFailure(stuckPending);
+          } else {
+            void this.playNext();
+          }
+          return;
+        }
+        this.consecutiveSilenceTicks = 0;
+        return;
+      }
+
       // Check 0: Autonomous Self-Healing Idle Recovery (Guarantees zero persistent dead air)
       if (!this.currentTrack && this.autoplayEnabled && !this.isPaused && !this.isTransitioning && !this.isHandlingFailure && !this.isPlayingNext) {
         this.consecutiveSilenceTicks = 0;
@@ -224,6 +252,18 @@ export class GuildPlayer extends EventEmitter {
           void this.replenishAutoplayBuffer();
         }
         return;
+      }
+
+      // Stuck state circuit-breaker for isPlayingNext and isHandlingFailure
+      if (this.isPlayingNext && this.playingNextStartedAt && Date.now() - this.playingNextStartedAt > 25_000) {
+        console.warn('[GuildPlayer] ⚠️ Watchdog: playNext() execution hung for > 25s. Forcing reset.');
+        this.isPlayingNext = false;
+        this.playingNextStartedAt = null;
+      }
+      if (this.isHandlingFailure && this.handlingFailureStartedAt && Date.now() - this.handlingFailureStartedAt > 25_000) {
+        console.warn('[GuildPlayer] ⚠️ Watchdog: handleTrackFailure() hung for > 25s. Forcing reset.');
+        this.isHandlingFailure = false;
+        this.handlingFailureStartedAt = null;
       }
 
       // Only monitor active unpaused playback with a valid track
@@ -407,7 +447,7 @@ export class GuildPlayer extends EventEmitter {
 
     this.broadcastTee.on('trackTransitionComplete', () => {
       console.log(`[GuildPlayer] Crossfade transition complete for "${this.currentTrack?.title}"`);
-      this.isTransitioning = false;
+      this.setTransitioning(false);
       this.consecutiveFailures = 0;
       this.currentTrackRetryCount = 0;
       this.emitStateChange();
@@ -430,6 +470,8 @@ export class GuildPlayer extends EventEmitter {
         this.currentTrackRetryCount = 0;
         this.recordFullPlayReward(this.currentTrack);
         this.playNext();
+      } else if (this.currentTrack && this.isTransitioning && !this.broadcastTee.isPlayingActive()) {
+        console.warn(`[GuildPlayer] BroadcastTee trackFinished while transition active. Awaiting handover or transition watchdog.`);
       }
     });
 
@@ -444,7 +486,7 @@ export class GuildPlayer extends EventEmitter {
       console.warn(`[GuildPlayer] Incoming handover track failed: ${err.message}`);
       const failed = this.pendingTrack;
       this.pendingTrack = null;
-      this.isTransitioning = false;
+      this.setTransitioning(false);
       if (failed) {
         await this.handleTrackFailure(failed);
       }
@@ -787,7 +829,7 @@ export class GuildPlayer extends EventEmitter {
     this.trackPlayStartTime = Date.now();
     this.currentTrack = track;
     this.pendingTrack = null;
-    this.isTransitioning = false;
+    this.setTransitioning(false);
     track.startedAtUnix = Math.floor(Date.now() / 1000);
 
     // Record track in database
@@ -831,6 +873,7 @@ export class GuildPlayer extends EventEmitter {
   private async handleTrackFailure(track: AudioTrack | null): Promise<void> {
     if (this.isHandlingFailure || !track) return;
     this.isHandlingFailure = true;
+    this.handlingFailureStartedAt = Date.now();
 
     try {
       // Record failed stream URL to prevent retry loops on the exact same YouTube video
@@ -857,9 +900,10 @@ export class GuildPlayer extends EventEmitter {
           track.durationSec = fallback.durationSec;
           track.prewarmedBuffer = undefined;
           this.isHandlingFailure = false;
+          this.handlingFailureStartedAt = null;
           if (this.broadcastTee.isPlayingActive()) {
             this.pendingTrack = track;
-            this.isTransitioning = true;
+            this.setTransitioning(true);
             this.broadcastTee.transitionTo(track.streamUrl);
           } else {
             this.startTrackPlayback(track);
@@ -877,7 +921,7 @@ export class GuildPlayer extends EventEmitter {
         console.error(`[GuildPlayer] Pausing playback: ${this.consecutiveFailures} consecutive tracks failed. Halting queue skip loop.`);
         this.currentTrack = null;
         this.pendingTrack = null;
-        this.isTransitioning = false;
+        this.setTransitioning(false);
         this.broadcastTee.stopDecoding(true);
         this.audioPlayer.stop();
         this.emitStateChange();
@@ -887,10 +931,15 @@ export class GuildPlayer extends EventEmitter {
       // Safety delay to prevent busy looping
       await new Promise((resolve) => setTimeout(resolve, 1000));
       this.isHandlingFailure = false;
+      this.handlingFailureStartedAt = null;
       await this.playNext();
     } catch (err) {
       console.error('[GuildPlayer] Error in handleTrackFailure:', (err as Error).message);
       this.isHandlingFailure = false;
+      this.handlingFailureStartedAt = null;
+    } finally {
+      this.isHandlingFailure = false;
+      this.handlingFailureStartedAt = null;
     }
   }
 
@@ -900,13 +949,14 @@ export class GuildPlayer extends EventEmitter {
   public async playNext(): Promise<void> {
     if (this.isPlayingNext) return;
     this.isPlayingNext = true;
+    this.playingNextStartedAt = Date.now();
 
     try {
       if (this.queue.length === 0) {
         this.currentTrack = null;
         this.updateVoiceChannelStatus(null);
         this.pendingTrack = null;
-        this.isTransitioning = false;
+        this.setTransitioning(false);
         this.broadcastTee.stopDecoding();
         this.audioPlayer.stop();
         this.emitStateChange();
@@ -924,7 +974,7 @@ export class GuildPlayer extends EventEmitter {
       }
       this.currentTrack = nextTrack;
       this.pendingTrack = null;
-      this.isTransitioning = false;
+      this.setTransitioning(false);
       this.currentTrackRetryCount = 0;
 
       // Resolve audio stream if not yet resolved during prewarming
@@ -933,6 +983,7 @@ export class GuildPlayer extends EventEmitter {
         if (!resolved) {
           console.warn(`[GuildPlayer] Stream resolution failed for "${nextTrack.title}", handling failure`);
           this.isPlayingNext = false;
+          this.playingNextStartedAt = null;
           await this.handleTrackFailure(nextTrack);
           return;
         }
@@ -956,6 +1007,7 @@ export class GuildPlayer extends EventEmitter {
       }
     } finally {
       this.isPlayingNext = false;
+      this.playingNextStartedAt = null;
     }
   }
 
@@ -974,7 +1026,7 @@ export class GuildPlayer extends EventEmitter {
       console.log('[GuildPlayer] No tracks remaining in queue for handover, stopping playback smoothly.');
       this.currentTrack = null;
       this.pendingTrack = null;
-      this.isTransitioning = false;
+      this.setTransitioning(false);
       this.broadcastTee.stopDecoding();
       this.audioPlayer.stop();
       this.emitStateChange();
@@ -983,7 +1035,7 @@ export class GuildPlayer extends EventEmitter {
 
     const nextTrack = this.queue.shift()!;
     this.pendingTrack = nextTrack;
-    this.isTransitioning = true;
+    this.setTransitioning(true);
     this.emitStateChange();
 
     try {
@@ -993,7 +1045,7 @@ export class GuildPlayer extends EventEmitter {
           console.warn(`[GuildPlayer] Failed to resolve handover stream for "${nextTrack.title}"`);
           const failed = this.pendingTrack;
           this.pendingTrack = null;
-          this.isTransitioning = false;
+          this.setTransitioning(false);
           if (failed) {
             await this.handleTrackFailure(failed);
           }
@@ -1037,7 +1089,7 @@ export class GuildPlayer extends EventEmitter {
     } catch (err) {
       console.error('[GuildPlayer] Error in prepareAndTriggerHandover:', (err as Error).message);
       this.pendingTrack = null;
-      this.isTransitioning = false;
+      this.setTransitioning(false);
     }
   }
 
@@ -1065,7 +1117,7 @@ export class GuildPlayer extends EventEmitter {
 
       console.log(`[GuildPlayer] ⚡ Burst settled. Handing over to "${track.title}" (${track.streamUrl})`);
       this.pendingTrack = track;
-      this.isTransitioning = true;
+      this.setTransitioning(true);
       this.recordTrackStart(track);
       this.updateVoiceChannelStatus(track);
       this.emitStateChange();
@@ -1086,7 +1138,7 @@ export class GuildPlayer extends EventEmitter {
     } catch (err) {
       console.error('[GuildPlayer] Error in executeBurstHandover:', (err as Error).message);
       this.pendingTrack = null;
-      this.isTransitioning = false;
+      this.setTransitioning(false);
     }
   }
 
@@ -1205,7 +1257,7 @@ export class GuildPlayer extends EventEmitter {
     this.queue = [];
     this.currentTrack = null;
     this.pendingTrack = null;
-    this.isTransitioning = false;
+    this.setTransitioning(false);
     this.consecutiveFailures = 0;
     this.currentTrackRetryCount = 0;
     this.audioPlayer.stop();
@@ -1704,7 +1756,7 @@ export class GuildPlayer extends EventEmitter {
     console.log(`[GuildPlayer] 🔄 Instant Replay requested for "${this.currentTrack.title}"`);
     this.currentTrack.startedAtUnix = Math.floor(Date.now() / 1000);
     this.pendingTrack = null;
-    this.isTransitioning = false;
+    this.setTransitioning(false);
     const replayed = this.broadcastTee.replayCurrentTrack();
     if (!replayed) {
       this.queue.unshift(this.currentTrack);

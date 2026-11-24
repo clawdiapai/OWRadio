@@ -149,6 +149,7 @@ interface CrossfadeState {
   fadeFramesElapsed: number;
   totalFadeFrames: number;
   isUserSkip?: boolean;
+  bufferingStartedAt?: number;
 }
 
 export class BroadcastTee extends EventEmitter {
@@ -961,6 +962,8 @@ export class BroadcastTee extends EventEmitter {
 
     if (!this.isPlaying || !this.activeChannel) {
       this.startDecoding(streamUrl);
+      this.emit('trackCrossfadeStart');
+      this.emit('trackTransitionComplete');
       return true;
     }
 
@@ -1020,6 +1023,7 @@ export class BroadcastTee extends EventEmitter {
         status: 'buffering',
         fadeFramesElapsed: 0,
         totalFadeFrames: fadeFrames,
+        bufferingStartedAt: Date.now(),
       };
       // Advance standby queue processing to replenish pool
       this.processStandbyQueue();
@@ -1046,6 +1050,7 @@ export class BroadcastTee extends EventEmitter {
       fadeFramesElapsed: 0,
       totalFadeFrames: fadeFrames,
       isUserSkip: isUserSkip || false,
+      bufferingStartedAt: Date.now(),
     };
     this.incomingChannel = this.spawnDecodeChannel(streamUrl, 'incoming');
     return true;
@@ -1238,6 +1243,31 @@ export class BroadcastTee extends EventEmitter {
             this.crossfadeState = null;
             this.emit('incomingTrackError', new Error(`Incoming channel decoder closed prematurely for: ${failedUrl}`));
             return;
+          }
+
+          // Buffering timeout guard: if incoming channel takes > 12s to buffer MIN_HANDOVER_FRAMES
+          const bufferingElapsed = Date.now() - (this.crossfadeState.bufferingStartedAt || Date.now());
+          if (bufferingElapsed > 12_000) {
+            console.warn(`[BroadcastTee] Incoming channel buffering timed out after 12s. Aborting crossfade.`);
+            const failedUrl = this.incomingChannel.streamUrl;
+            this.teardownChannel(this.incomingChannel);
+            this.incomingChannel = null;
+            this.crossfadeState = null;
+            this.emit('incomingTrackError', new Error(`Incoming channel buffering timed out after 12s for: ${failedUrl}`));
+            return;
+          }
+
+          // If active channel drained completely before incoming reached full cushion, promote early if we have audio
+          if (
+            this.activeChannel &&
+            this.activeChannel.decoderClosed &&
+            this.activeChannel.queueBytes === 0 &&
+            this.incomingChannel.queueBytes > 0
+          ) {
+            console.log(`[BroadcastTee] Active channel drained to 0 before full buffer cushion. Promoting incoming channel immediately.`);
+            this.crossfadeState.status = 'fading';
+            this.crossfadeState.fadeFramesElapsed = 0;
+            this.emit('trackCrossfadeStart');
           }
 
           const minRequired = this.crossfadeState.isUserSkip ? 5 : MIN_HANDOVER_FRAMES;
